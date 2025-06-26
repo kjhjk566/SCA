@@ -15,19 +15,22 @@ class StaticCallGraphBuilder:
         call_matrix = self.call_graph
 
         # 遍历调用链trace
-        for src_name, dst_name in self.trace_data:
-            if src_name in all_enum and dst_name in all_enum:
-                src_idx = all_enum[src_name]
-                dst_idx = all_enum[dst_name]
-                call_matrix[src_idx, dst_idx] = 1
+        if self.trace_data is not None:
+            for src_name, dst_name in self.trace_data:
+            
+                if src_name in all_enum and dst_name in all_enum:
+                    src_idx = all_enum[src_name]
+                    dst_idx = all_enum[dst_name]
+                    call_matrix[src_idx, dst_idx] = 1
 
         # 遍历部署关系deploy
-        for node_name, services in self.deploy_data:
-            for service_name in services:
-                if node_name in all_enum and service_name in all_enum:
-                    node_idx = all_enum[node_name]
-                    service_idx = all_enum[service_name]
-                    call_matrix[node_idx, service_idx] = 1
+        if self.deploy_data is not None:
+            for node_name, services in self.deploy_data:
+                for service_name in services:
+                    if node_name in all_enum and service_name in all_enum:
+                        node_idx = all_enum[node_name]
+                        service_idx = all_enum[service_name]
+                        call_matrix[node_idx, service_idx] = 1
 
         self.call_matrix = call_matrix
         return call_matrix

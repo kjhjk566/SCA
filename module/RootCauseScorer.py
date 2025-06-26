@@ -14,9 +14,50 @@ class RootCauseScorer(nn.Module):
         super(RootCauseScorer, self).__init__()
         self.alpha = alpha
         self.beta = beta
-        self.topk = config.topk  # 取前多少个实例
+        self.topk = config.topk  # 取前多少个实例、
+    def get_ans_causal(self, anomaly_score, edge_index,edge_weight, node_mapping, instance_names,adj):
+        instance_anomaly = []
+        idx = 0
+        for name in instance_names:
+            num_nodes = node_mapping.get(name, 0)
+            if num_nodes == 0:
+                continue
+            score_slice = anomaly_score[:, idx:idx+num_nodes]  # 保留 batch 维度
+            instance_anomaly.append(score_slice.mean())
+            idx += num_nodes
 
-    def get_ans(self, anomaly_score, edge_index, node_mapping, instance_names):
+        if len(instance_anomaly) == 0:
+            return []
+
+        instance_anomaly = torch.stack(instance_anomaly)
+        N = instance_anomaly.size(0)
+        # A = torch.zeros(N, N, device=instance_anomaly.device)
+        # # 使用edge_index和edge_weight构建图
+        # src, dst = edge_index
+        # A[src, dst] = edge_weight  # 使用edge_weight作为边的权重
+
+        # 计算影响分数
+        influence = torch.matmul(adj.T, instance_anomaly.unsqueeze(-1)).squeeze()
+        
+        #A小于0.1的设置为0
+        # adj[adj<0.1] = 0
+        # print("adj",adj)
+        
+        # 计算最终的根因得分
+        root_score = instance_anomaly-influence
+        # print("instance_anomaly",instance_anomaly)
+        # print("influence",influence)
+        # print("root_score",root_score)
+        
+        # 获取topk的服务名称
+        _, indices = torch.topk(root_score, self.topk)
+        topk_names = [instance_names[i] for i in indices.tolist()]
+        return topk_names
+
+
+        
+
+    def get_ans(self, anomaly_score, edge_index,edge_weight, node_mapping, instance_names,adj):
         """
         :param anomaly_score: [num_total_nodes] 节点级异常分数
         :param edge_index: [2, num_edges] 实例调用边
@@ -38,6 +79,7 @@ class RootCauseScorer(nn.Module):
             return []
 
         instance_anomaly = torch.stack(instance_anomaly)
+        print("instance_anomaly.shape:",instance_anomaly.shape)
 
         N = instance_anomaly.size(0)
         A = torch.zeros(N, N, device=instance_anomaly.device)

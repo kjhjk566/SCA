@@ -1,3 +1,4 @@
+from ast import arg
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 提到最上面！！
@@ -23,7 +24,9 @@ import torch.nn.functional as F
 import pickle
 import numpy as np
 from module.RootCauseScorer import RootCauseScorer
-day = 5
+#day = 7
+
+
 
 def parse_args():
     """
@@ -32,10 +35,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description='根因分析模型训练和测试')
     parser.add_argument('-M', '--mode', type=str, default='train', choices=['train', 'test'],
                       help='运行模式：train 或 test')
-    parser.add_argument('--model_path', type=str, default=f'model_{day}.pth',
-                      help='模型保存/加载路径')
-    parser.add_argument('--data_path', type=str, default=f'/home/kuangjunhua/research/data/aiops22_dataset/{day}',
-                      help='数据路径')
     parser.add_argument('--batch_size', type=int, default=16,
                       help='训练时的批次大小')
     parser.add_argument('--epochs', type=int, default=1,
@@ -46,9 +45,15 @@ def parse_args():
                       help='时间窗口大小')
     parser.add_argument('--stride', type=int, default=1,
                       help='时间窗口步长')
+    parser.add_argument('-ds','--dataset', type=str, default="aiops22",
+                      help='')
+    parser.add_argument('-dr','--data_range', type=str, default='all',choices=['all','day'],
+                      help='')
+    parser.add_argument('-D','--day', type=str, default='01',
+                      help='数据集日期')
     return parser.parse_args()
 
-def evaluate_topk_accuracy(all_ans, all_labels, topk_list=[1, 5]):
+def evaluate_topk_accuracy(all_ans, all_labels, topk_list=[1,3, 5]):
     """
     计算 Top-K 准确率，支持前缀匹配。
     
@@ -90,31 +95,51 @@ def print_prediction_result(case_id, pred_list, true_label, is_correct):
 if __name__ == "__main__":
     # 解析命令行参数
     args = parse_args()
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     print("Using device:", device)
     print("运行模式:", args.mode)
-    print("模型路径:", args.model_path)
+    if args.data_range == 'all':
+        args.data_path = f'/home/kuangjunhua/research/data/{args.dataset}'
+        args.model_path = f'/home/kuangjunhua/research/new_method/model_save/model_{args.dataset}_all.pth'
+
+    elif args.data_range == 'day':
+        args.data_path = f'/home/kuangjunhua/research/data/{args.dataset}/{args.day}'
+        args.model_path = f'/home/kuangjunhua/research/new_method/model_save/model_{args.dataset}_{args.day}.pth'
     print("数据路径:", args.data_path)
+    day = args.day
+
 
     # 读取数据
-    config = Config()
+    config = Config(args.dataset)
     config.batch_size = args.batch_size
-    config.epochs = args.epochs
-    trace_df = pd.read_csv(os.path.join(args.data_path, 'trace_jaeger-span_new_2.csv'))
-    deploy_df = pd.read_csv(f'/home/kuangjunhua/research/data/aiops2022-pre/2022-05-0{day}/cloudbed/metric/container/kpi_container_cpu_cfs_periods.csv')
+    trace_df = None
+    deploy_df = None
+    # trace_df = pd.read_csv(os.path.join(args.data_path, 'trace_jaeger-span_new_2.csv'))
+    # deploy_df = pd.read_csv(f'/home/kuangjunhua/research/data/aiops2022-pre/2022-05-0{day}/cloudbed/metric/container/kpi_container_cpu_cfs_periods.csv')
+    
     parser = TraceParser(trace_df,deploy_df)
-    parser.parse_trace(os.path.join(args.data_path, 'trace_jaeger-span_new_2.pkl'))
+    #parser.parse_trace(os.path.join(args.data_path, 'trace_jaeger-span_new_2.pkl'))
     parser.extract_node_service_mapping(os.path.join(args.data_path, 'deploy.pkl'))
     
     s = StaticCallGraphBuilder(parser.parsed_trace,parser.deploy_edges, config)
     call_graph = s.get_call_graph()
     
     #原始数据
-    with open(os.path.join(args.data_path, 'normal_data.pkl'), 'rb') as f:
+    # if args.dataset == 'all':
+    #     path = '/home/kuangjunhua/research/data/aiops22_dataset/train_df.pkl'
+    # elif args.dataset == 'normal':
+    #     path = os.path.join(args.data_path, 'normal_data.pkl')
+    path = os.path.join(args.data_path, 'train.pkl')
+    
+    
+    with open(path, 'rb') as f:
         data = pickle.load(f)
     print("raw_data.shape:",data.shape)
+    #数据是否有nan
+    print("数据是否有nan:",data.isna().sum().sum())
     
-    data_processor = DataProcessor(data, Config(), window_size=args.window_size, stride=args.stride)
+    
+    data_processor = DataProcessor(data, config, window_size=args.window_size, stride=args.stride)
     config.instance_metric_mapping = data_processor.instance_metric_mapping
     train_dataset = TimeWindowDataset(data_processor, config)
     train_loader = PyGDataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
@@ -138,6 +163,7 @@ if __name__ == "__main__":
             for batch, instance_names, y_window in batch_pbar:
                 batch = batch.to(device)
                 y_window = y_window.to(device)
+              
                 instance_names = [name[0] for name in instance_names]
                 
                 loss = model(batch, instance_names, y_window)
@@ -159,13 +185,17 @@ if __name__ == "__main__":
         print(f"模型已保存到: {args.model_path}")
 
     #加载模型
-    model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64)
-    model.load_state_dict(torch.load(args.model_path))
-    model.set_call_graph(call_graph,device)
-    model.set_node_mapping(data_processor.instance_metric_mapping)
-    model.to(device)
-
-    with open(os.path.join(args.data_path, 'case_20min_data.pkl'), 'rb') as f:
+    # model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64)
+    # model.load_state_dict(torch.load(args.model_path))
+    # # model.set_call_graph(call_graph,device)
+    # # model.set_node_mapping(data_processor.instance_metric_mapping)
+    # model.to(device)
+    if args.dataset == 'all':
+        path = '/home/kuangjunhua/research/data/aiops22_dataset/case_data.pkl'
+    elif args.dataset == 'normal':
+        path = os.path.join(args.data_path, 'case_20min_data.pkl')
+    case_path = os.path.join(args.data_path, 'case_20min_data.pkl')
+    with open(case_path, 'rb') as f:
         test_case = pickle.load(f)
 
     model.eval()
@@ -174,7 +204,7 @@ if __name__ == "__main__":
     
     print("\n开始测试...")
     failed_cases = []  # 存储预测失败的案例
-    for case_id, (case_data, label) in enumerate(tqdm(test_case)):
+    for case_id, (case_data, label, ts) in enumerate(tqdm(test_case)):
         all_labels.append(label)
 
         data_processor = DataProcessor(case_data, config, window_size=args.window_size, stride=args.stride)
@@ -192,10 +222,12 @@ if __name__ == "__main__":
                 all_score = all_score + anomaly_score
         all_score = all_score / len(test_loader)
 
-        ans = root_cause_scorer.get_ans(all_score, edge_index, data_processor.instance_metric_mapping, instance_names)
+        ans = root_cause_scorer.get_ans(all_score,model.edge_index,model.edge_weight, data_processor.instance_metric_mapping, instance_names,model.causal_adj)
         all_ans.append(ans)
         
         # 检查预测是否正确
+        print("ans:",ans)
+        print("label:",label)
         is_correct = any(any(pred.startswith(true) for pred in ans) for true in ([label] if isinstance(label, str) else label))
         
         # 打印预测结果
@@ -208,14 +240,18 @@ if __name__ == "__main__":
                 'case_data': case_data,
                 'pred_services': ans,
                 'true_services': [label] if isinstance(label, str) else label,
-                'instance_names': instance_names
+                'ts': ts
             })
+        with open('failed_cases.pkl', 'wb') as f:
+            pickle.dump(failed_cases, f)
 
     # 计算并打印总体准确率
     accuracy = evaluate_topk_accuracy(all_ans, all_labels, topk_list=[1, 5])
     print("\n总体评估结果:")
     print(f"Top-1 准确率: {accuracy[1]:.2%}")
     print(f"Top-5 准确率: {accuracy[5]:.2%}")
+    print(f"day:{day}")
+
     
     # 可视化预测失败的案例
     # if failed_cases:

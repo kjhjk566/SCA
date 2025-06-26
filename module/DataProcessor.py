@@ -32,7 +32,7 @@ class DataProcessor:
         # print("DataFrame after reordering columns:")
         # print(self.df.head())
         #将self.df.head()保存为csv文件
-        self.df.to_csv('reordered_data.csv', index=False)
+        #self.df.to_csv('reordered_data.csv', index=False)
         #print("after reorder_columns:",self.df.shape)
         self.feature_columns = self.df.columns[1:]  # 除去timestamp列
 
