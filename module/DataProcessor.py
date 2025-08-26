@@ -7,7 +7,7 @@ from collections import defaultdict
 
 
 class DataProcessor:
-    def __init__(self, df, config, window_size=10, stride=1):
+    def __init__(self, df, config, window_size=20, stride=1, window_stride=3,small_window_size=5):
         """
         
         :param config: 包含 all_enum 的配置对象
@@ -18,6 +18,8 @@ class DataProcessor:
         self.config = config
         self.window_size = window_size
         self.stride = stride
+        self.window_stride = window_stride
+        self.small_window_size = small_window_size
 
         self.df = df
         # 归一化特征列
@@ -29,15 +31,10 @@ class DataProcessor:
         # 重新排列列
         #print("before reorder_columns:",self.df.shape)
         self.reorder_columns()
-        # print("DataFrame after reordering columns:")
-        # print(self.df.head())
-        #将self.df.head()保存为csv文件
-        #self.df.to_csv('reordered_data.csv', index=False)
-        #print("after reorder_columns:",self.df.shape)
+        
         self.feature_columns = self.df.columns[1:]  # 除去timestamp列
 
-        self.subgraph_manager = SubgraphManager(self.feature_columns, self.config)
-        self.instance_metric_mapping = self.subgraph_manager.instance_to_metric_count_dict  # 存储实例到指标数量的映射
+        
     def reorder_columns(self):
         """
         按照 config.all_enum 中定义的指标顺序，重新排列 DataFrame 中的列
@@ -58,6 +55,28 @@ class DataProcessor:
                 raise ValueError(f"Instance {instance} not found in raw data columns!")
 
         self.df = pd.concat([self.df.iloc[:, [0]], self.df[ordered_feature_cols]], axis=1)
+        # 记录每个实例的指标数量
+        self.instance_metric_count_dict = {inst: len(cols) for inst, cols in instance_name_map.items()}
+    def generate_patches_tensor(self,time_series, patch_size, stride=None):
+        """
+        使用 PyTorch 将多变量时间序列张量划分为 patch。
+
+        参数:
+        - time_series: torch.Tensor, shape (N, L)，N个传感器，L个时间步
+        - patch_size: int，patch的时间步长
+        - stride: int，滑动窗口步长，默认等于patch_size（无重叠）
+
+        返回:
+        - patches: torch.Tensor, shape (num_patches, N, patch_size)
+        """
+        N, L = time_series.shape
+        num_patches = (L - patch_size) // stride + 1
+
+        # 使用 unfold 展开成滑动窗口，shape: (N, num_patches, patch_size)
+        patches = time_series.unfold(dimension=1, size=patch_size, step=stride)
+        return patches
+
+        
     def init_subgraph_manager(self):
         """初始化 SubgraphManager，分配指标到对应实例"""
         self.subgraph_manager = SubgraphManager(self.feature_columns, self.config)
@@ -69,26 +88,13 @@ class DataProcessor:
         windows = []
         for start_idx in range(0, feature_data.size(0) - self.window_size, self.stride):
             x_window = feature_data[start_idx: start_idx + self.window_size]       # 输入窗口
+           
+            x_window = x_window.permute(1,0)            
+            x_window = self.generate_patches_tensor(x_window, patch_size=self.small_window_size, stride=self.window_stride)  # [num_patches, num_features, patch_size]
             y_window = feature_data[start_idx + self.window_size]                  # 预测目标（单步预测）
             windows.append((x_window, y_window))
         return windows
 
-    def create_batch(self, x_window):
-        """
-        根据一个输入窗口，构建子图Batch
-        :param x_window: [window_size, num_features]
-        :return: PyG Batch对象
-        """
-        self.subgraph_manager.build_initial_subgraphs(x_window)  # 构建新的子图
-        self.instance_metric_mapping = self.subgraph_manager.instance_to_metric_count_dict  # 更新节点映射
-        subgraph_list = [self.subgraph_manager.get_instance_graph(inst) for inst in self.subgraph_manager.list_all_instances()]
-        # for i, subgraph in enumerate(subgraph_list):
-        #     if subgraph is None:
-        #         continue
-            
-
-        batch = Batch.from_data_list(subgraph_list)
-        return batch
 
 from torch.utils.data import Dataset
 
@@ -106,6 +112,6 @@ class TimeWindowDataset(Dataset):
 
     def __getitem__(self, idx):
         x_window, y_window = self.windows[idx]
-        batch = self.data_processor.create_batch(x_window)
+        
         instance_names = list(map(str, self.config.all_enum.keys()))
-        return batch, instance_names, y_window
+        return x_window, instance_names, y_window,

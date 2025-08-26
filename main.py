@@ -1,12 +1,16 @@
 from ast import arg
 import sys
 import os
+
+from sympy import root
+
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 提到最上面！！
 
 import pandas as pd
 import argparse
 from utils.visualization import plot_metrics_comparison
-
+from visualize import visualize_instance_reconstruction
 from config import Config
 from module.TraceParser import TraceParser
 from module.DataProcessor import DataProcessor,TimeWindowDataset
@@ -18,6 +22,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch.utils.data import DataLoader
 from module.NodeDecoder import NodeDecoder
 from model.FullGraphModel import FullGraphRCA
+from model.SCA import SCA
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
@@ -37,19 +42,19 @@ def parse_args():
                       help='运行模式：train 或 test')
     parser.add_argument('--batch_size', type=int, default=16,
                       help='训练时的批次大小')
-    parser.add_argument('--epochs', type=int, default=1,
+    parser.add_argument('--epochs', type=int, default=3,
                       help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001,
                       help='学习率')
-    parser.add_argument('--window_size', type=int, default=10,
+    parser.add_argument('--window_size', type=int, default=20,
                       help='时间窗口大小')
     parser.add_argument('--stride', type=int, default=1,
                       help='时间窗口步长')
-    parser.add_argument('-ds','--dataset', type=str, default="aiops22",
+    parser.add_argument('-ds','--dataset', type=str, default="aiops25",
                       help='')
-    parser.add_argument('-dr','--data_range', type=str, default='all',choices=['all','day'],
+    parser.add_argument('-dr','--data_range', type=str, default='day',choices=['all','day'],
                       help='')
-    parser.add_argument('-D','--day', type=str, default='01',
+    parser.add_argument('-D','--day', type=str, default='20',
                       help='数据集日期')
     return parser.parse_args()
 
@@ -104,7 +109,7 @@ if __name__ == "__main__":
 
     elif args.data_range == 'day':
         args.data_path = f'/home/kuangjunhua/research/data/{args.dataset}/{args.day}'
-        args.model_path = f'/home/kuangjunhua/research/new_method/model_save/model_{args.dataset}_{args.day}.pth'
+        args.model_path = f'/home/kuangjunhua/research/SCA/model_save/model_{args.dataset}_{args.day}.pth'
     print("数据路径:", args.data_path)
     day = args.day
 
@@ -117,19 +122,19 @@ if __name__ == "__main__":
     # trace_df = pd.read_csv(os.path.join(args.data_path, 'trace_jaeger-span_new_2.csv'))
     # deploy_df = pd.read_csv(f'/home/kuangjunhua/research/data/aiops2022-pre/2022-05-0{day}/cloudbed/metric/container/kpi_container_cpu_cfs_periods.csv')
     
-    parser = TraceParser(trace_df,deploy_df)
-    #parser.parse_trace(os.path.join(args.data_path, 'trace_jaeger-span_new_2.pkl'))
-    parser.extract_node_service_mapping(os.path.join(args.data_path, 'deploy.pkl'))
+    # parser = TraceParser(trace_df,deploy_df)
+    # #parser.parse_trace(os.path.join(args.data_path, 'trace_jaeger-span_new_2.pkl'))
+    # parser.extract_node_service_mapping(os.path.join(args.data_path, 'deploy.pkl'))
     
-    s = StaticCallGraphBuilder(parser.parsed_trace,parser.deploy_edges, config)
-    call_graph = s.get_call_graph()
+    # s = StaticCallGraphBuilder(parser.parsed_trace,parser.deploy_edges, config)
+    # call_graph = s.get_call_graph()
     
     #原始数据
     # if args.dataset == 'all':
     #     path = '/home/kuangjunhua/research/data/aiops22_dataset/train_df.pkl'
     # elif args.dataset == 'normal':
     #     path = os.path.join(args.data_path, 'normal_data.pkl')
-    path = os.path.join(args.data_path, 'train.pkl')
+    path = os.path.join(args.data_path, 'normal_data.pkl')
     
     
     with open(path, 'rb') as f:
@@ -140,19 +145,30 @@ if __name__ == "__main__":
     
     
     data_processor = DataProcessor(data, config, window_size=args.window_size, stride=args.stride)
-    config.instance_metric_mapping = data_processor.instance_metric_mapping
+    config.instance_metric_count_dict = data_processor.instance_metric_count_dict
+    #print(config.instance_metric_count_dict)
     train_dataset = TimeWindowDataset(data_processor, config)
-    train_loader = PyGDataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
+    #print("第一个数据样本:")
+    #print(train_dataset[0])
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
+    for x_window, instance_names, y_window in train_loader:
+        print("x_window:", x_window.shape)
+        #print("instance_names:", instance_names)
+        print("y_window:", y_window.shape)
+        break
+    model = SCA(config, input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
 
 
-    model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64).to(device)
-    model.set_call_graph(call_graph,device)
-    model.set_node_mapping(data_processor.instance_metric_mapping)
-  
+#    train_loader = PyGDataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
+
+ 
+#     model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64).to(device)
+#     model.set_call_graph(call_graph,device)
+#     model.set_node_mapping(data_processor.instance_metric_mapping)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     root_cause_scorer = RootCauseScorer(alpha=1.0, beta=0.01,config=config)
-    edge_index, _ = dense_to_sparse(torch.tensor(call_graph, dtype=torch.float))
+#     edge_index, _ = dense_to_sparse(torch.tensor(call_graph, dtype=torch.float))
 
     if args.mode == 'train':
         print("\n开始训练...")
@@ -160,18 +176,16 @@ if __name__ == "__main__":
             epoch_loss = 0.0
             batch_count = 0
             batch_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", leave=False)
-            for batch, instance_names, y_window in batch_pbar:
-                batch = batch.to(device)
+            for x_window, instance_names, y_window in batch_pbar:
+                x_window = x_window.to(device)
                 y_window = y_window.to(device)
-              
-                instance_names = [name[0] for name in instance_names]
-                
-                loss = model(batch, instance_names, y_window)
+                Lg, Ls, loss = model(x_window, y_window)
+
                 epoch_loss += loss.item()
                 batch_count += 1
                 
                 # 更新batch进度条显示的loss
-                batch_pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+                batch_pbar.set_postfix({'loss': f'{loss.item():.4f}', 'Lg': f'{Lg.item():.4f}', 'Ls': f'{Ls.item():.4f}'})
                 
                 loss.backward()
                 optimizer.step()
@@ -183,13 +197,18 @@ if __name__ == "__main__":
             
         torch.save(model.state_dict(), args.model_path)
         print(f"模型已保存到: {args.model_path}")
+    # 方法1: 查看特定实例
+    viz_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+
+    # 查看指定实例的重构效果
+    
 
     #加载模型
-    # model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64)
-    # model.load_state_dict(torch.load(args.model_path))
-    # # model.set_call_graph(call_graph,device)
-    # # model.set_node_mapping(data_processor.instance_metric_mapping)
-    # model.to(device)
+    model = SCA(config, input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
+    model.load_state_dict(torch.load(args.model_path),strict=False)
+    # model.set_call_graph(call_graph,device)
+    # model.set_node_mapping(data_processor.instance_metric_mapping)
+    model.to(device)
     if args.dataset == 'all':
         path = '/home/kuangjunhua/research/data/aiops22_dataset/case_data.pkl'
     elif args.dataset == 'normal':
@@ -202,48 +221,83 @@ if __name__ == "__main__":
     all_ans = []
     all_labels = []
     
+
+    
     print("\n开始测试...")
     failed_cases = []  # 存储预测失败的案例
+    case_pic_file = '/home/kuangjunhua/research/SCA/case_pic'
+    with open('/home/kuangjunhua/research/data/aiops25/20/deploy_graph.pkl', 'rb') as f:
+        graph = pickle.load(f)
     for case_id, (case_data, label, ts) in enumerate(tqdm(test_case)):
         all_labels.append(label)
 
         data_processor = DataProcessor(case_data, config, window_size=args.window_size, stride=args.stride)
         test_dataset = TimeWindowDataset(data_processor, config)
-        test_loader = PyGDataLoader(test_dataset, batch_size=1, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        #print(len(test_loader))
+        
+        #print("case_data:",case_data.shape)
+        if case_data.shape[0]<args.window_size:
+            print(f"Case {case_id+1} 数据长度不足，跳过该案例。")
+            continue
         all_score = None
-        for batch, instance_names, y_window in test_loader:
-            instance_names = [name[0] for name in instance_names]
-            batch = batch[0].to(device)
+        for x_window, instance_names, y_window in test_loader:
+            #print("x_window:", x_window.shape)
+            x_window = x_window.to(device)
+            y_window = y_window.to(device)
             y_window = y_window[0].to(device)
-            anomaly_score = model.get_anomaly_score(batch, instance_names, y_window)
+            
+            anomaly_score = model.calculate_metric_loss(x_window, y_window)
             if all_score is None:
                 all_score = anomaly_score
             else:
                 all_score = all_score + anomaly_score
+        print("anomaly_score:", anomaly_score)
+        print("all_score shape:", all_score.shape)
         all_score = all_score / len(test_loader)
+        #修改为一维张量
+        all_score = all_score.squeeze(-1).cpu()
+        #print('all_score',all_score)
 
-        ans = root_cause_scorer.get_ans(all_score,model.edge_index,model.edge_weight, data_processor.instance_metric_mapping, instance_names,model.causal_adj)
+        ans = root_cause_scorer.get_ans_from_loss(all_score)
+        
+        #ans = root_cause_scorer.get_root_cause_by_walk(all_score, graph)
         all_ans.append(ans)
         
         # 检查预测是否正确
-        print("ans:",ans)
-        print("label:",label)
+        # print("ans:",ans)
+        # print("label:",label)
         is_correct = any(any(pred.startswith(true) for pred in ans) for true in ([label] if isinstance(label, str) else label))
         
         # 打印预测结果
         print_prediction_result(case_id + 1, ans, label, is_correct)
-        
-        # 如果预测失败，保存案例信息
-        if not is_correct:
-            failed_cases.append({
-                'case_id': case_id + 1,
-                'case_data': case_data,
-                'pred_services': ans,
-                'true_services': [label] if isinstance(label, str) else label,
-                'ts': ts
-            })
-        with open('failed_cases.pkl', 'wb') as f:
-            pickle.dump(failed_cases, f)
+        # case_path = os.path.join(case_pic_file,"case_"+str(case_id+1))
+        # if not os.path.exists(case_path):
+        #     os.makedirs(case_path)
+        # for a in ans:
+        #     target_instance = a
+        #     if target_instance in config.instance_metric_count_dict:
+        #         visualize_instance_reconstruction(
+        #             model=model,
+        #             data_loader=test_loader,
+        #             config=config,
+        #             device=device,
+        #             instance_name=target_instance,
+        #             save_path=os.path.join(case_path,target_instance+'.png')
+        #         )
+        # for l in label:
+        #     target_instance = l
+        #     if target_instance in config.instance_metric_count_dict:
+        #         visualize_instance_reconstruction(
+        #             model=model,
+        #             data_loader=test_loader,
+        #             config=config,
+        #             device=device,
+        #             instance_name=target_instance,
+        #             save_path=os.path.join(case_path,target_instance+'.png')
+        #         )
+
+       
 
     # 计算并打印总体准确率
     accuracy = evaluate_topk_accuracy(all_ans, all_labels, topk_list=[1, 5])
