@@ -15,7 +15,7 @@ from model.net import gtnet
 
 
 class SCA(nn.Module):
-    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0):
+    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim,metric_num, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0):
         super(SCA, self).__init__()
         # 初始化 PodEmbedding 模块
         self.transformer_encoder = TemporalEncoder(input_dim, window_size=5, hidden_dim=hidden_dim, num_layers=2, nhead=2, dropout=0.1)
@@ -39,8 +39,9 @@ class SCA(nn.Module):
         self.gtnet = gtnet(
             gcn_true=True, 
             buildA_true=True, 
-            gcn_depth=10, #从2->10
-            num_nodes=len(config.all_enum.keys()), 
+            gcn_depth=2, #从2->10
+            #num_nodes=len(config.all_enum.keys()), 
+            num_nodes=metric_num,
             device=torch.device('cuda:1' if torch.cuda.is_available() else 'cpu'), 
             dropout=0.3, 
             subgraph_size=20, 
@@ -49,10 +50,10 @@ class SCA(nn.Module):
             residual_channels=32, 
             skip_channels=64, 
             end_channels=128, 
-            seq_length=6, 
-            in_dim=5, 
+            seq_length=20, 
+            in_dim=1, 
             out_dim=12, 
-            layers=30, #从3->30
+            layers=10, #从3->30
             propalpha=0.05, 
             tanhalpha=3, 
             layer_norm_affline=True
@@ -78,7 +79,7 @@ class SCA(nn.Module):
         :param y_window: Tensor of shape [B, 1]，预测目标
         :return: output: Tensor of shape [B, 1], l1_reg: scalar regularization term
         """
-        p,_ = self.get_prediction(x_window)  # 获取预测结果
+        p = self.get_prediction(x_window)  # 获取预测结果
         # p = self.get_prediction(x_window)
         # 第二步：通过 SCA 的后续层处理
         loss = self.loss(p, y_window)  # 计算损失
@@ -93,76 +94,28 @@ class SCA(nn.Module):
         :return: output: Tensor of shape [B, 1]
         """
         # 第一步：通过 PodEmbedding 生成 pod-level 表示
-        metric_embedding = self.transformer_encoder(x_window)  # [B, N, D]
+        #metric_embedding = self.transformer_encoder(x_window)  # [B, N, D]
         #print("metric_embedding shape:", metric_embedding.shape)  # 输出形状检查
 
-        """
-        原模块
-        """
-        # pod_embedding, l1_reg = self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
-        # # print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
-        # st_in = pod_embedding.permute(0, 2, 1, 3)
-        # st_out = self.st_embedding(st_in)  # [B, N, D] 时空特征提取
-
-        """
-        gtnet模块
-        """
-
-        pod_embedding, l1_reg = self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
+        #pod_embedding, l1_reg = self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
         # print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
-        st_in = pod_embedding.permute(0, 3, 1, 2) 
+        #st_in = pod_embedding.permute(0, 3, 1, 2) 
 
-        st_out = self.gtnet.encode(st_in)
-        # print("st_out:", st_out.shape)  # 输出形状检查
-        st_out = st_out.squeeze(-1)                # [B, end_channels, N]
-        # 第三步：通过 NodeDecoder 生成指标预测
-        st_out = st_out.permute(0, 2, 1)   # → [B, N, 128]
+        st_out = self.gtnet.encode(x_window)
+        st_out = st_out.squeeze(-1)        # [16, 128, 541]
+        st_out = st_out.permute(0, 2, 1)   # [16, 541, 128]
 
-        """
-        去掉pod_embedding（原模块）
-        """
-        # print("x_window shape:", x_window.shape)  # 输出形状检查
-        # st_in = x_window.permute(0, 2, 1, 3)
-        # st_out = self.st_embedding(st_in)  # [B, N, D] 时空特征提取
 
-        """
-        去掉pod_embedding（gtnet模块）
-        """
-        # print("x_window shape:", x_window.shape)  # 输出形状检查
-        # st_in = x_window.permute(0, 3, 1, 2)
-        # st_out = self.gtnet.encode(st_in)
-        # st_out = st_out.squeeze(-1)                # [B, end_channels, N]
-        # st_out = st_out.permute(0, 2, 1)   # → [B, N, 128]
-
-        """
-        end
-        """
-
-        # print("x_window shape:", x_window.shape)  # 输出形状检查
-        # pod_embedding, l1_reg = self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
-        #print(self.config.instance_metric_count_dict)
-        #print(len(self.config.instance_metric_count_dict.keys()))
-        # print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
-        # st_in = pod_embedding.permute(0, 2, 1, 3)
-        # st_out = self.st_embedding(st_in)  # [B, N, D] 时空特征提取
-        # 你的 pod_embedding 形状: [B=16, N=41, T=6, F=5]
-        # st_in = pod_embedding.permute(0, 3, 1, 2)      # → [B, F=5, N=41, T=6]
-        # st_in = x_window.permute(0, 3, 1, 2)
-
-        instance_names = list(self.config.instance_metric_count_dict.keys())
-        predictions = self.decoder.forward(st_out, instance_names,metric_embedding)
-        #print("predictions:", predictions.shape)  # 输出形状检查
+        #instance_names = list(self.config.instance_metric_count_dict.keys())
+        predictions = self.decoder.predict_next_step_gnet(st_out)  # [B, total_metrics]
+        #print("predictions:", predictions.shape)
+       
 
 
 
         # return predictions, l1_reg
-        return predictions,l1_reg
+        return predictions
 
-        # 第二步：通过 SCA 的后续层处理
-        # sca_output = F.relu(self.sca_layer(pod_embedding))  # 示例激活
-        # output = self.output_layer(sca_output)  # [B, 1]
-
-        # return output, l1_reg
     def loss(self, predictions, y_window):
         """
         计算损失函数
@@ -172,9 +125,9 @@ class SCA(nn.Module):
         """
         # 使用 MSELoss 计算损失
         loss_fn = nn.MSELoss()
-        Lg,Ls,L =  self.get_causal_gate_loss()
-        loss = loss_fn(predictions, y_window) + L
-        return Lg,Ls,loss
+        #Lg,Ls,L =  self.get_causal_gate_loss()
+        loss = loss_fn(predictions, y_window)
+        return loss
 
     # def get_causal_gate_loss(self):
     #     theta = self.st_embedding.MPNN1.causal_gate.theta
@@ -249,7 +202,7 @@ class SCA(nn.Module):
         Returns:
             metric_losses: [B, total_metrics] 每个指标的误差
         """
-        predictions, _ = self.get_prediction(x_window)
+        predictions = self.get_prediction(x_window)
         y_true = y_window
         y_true = y_true.unsqueeze(0) 
         # 计算每个指标的误差

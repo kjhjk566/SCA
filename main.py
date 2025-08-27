@@ -22,7 +22,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch.utils.data import DataLoader
 from module.NodeDecoder import NodeDecoder
 from model.FullGraphModel import FullGraphRCA
-from model.SCA import SCA
+from model.SCA_test import SCA
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
@@ -42,7 +42,7 @@ def parse_args():
                       help='运行模式：train 或 test')
     parser.add_argument('--batch_size', type=int, default=16,
                       help='训练时的批次大小')
-    parser.add_argument('--epochs', type=int, default=3,
+    parser.add_argument('--epochs', type=int, default=2,
                       help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001,
                       help='学习率')
@@ -150,25 +150,18 @@ if __name__ == "__main__":
     train_dataset = TimeWindowDataset(data_processor, config)
     #print("第一个数据样本:")
     #print(train_dataset[0])
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     for x_window, instance_names, y_window in train_loader:
         print("x_window:", x_window.shape)
         #print("instance_names:", instance_names)
         print("y_window:", y_window.shape)
+        metric_num = y_window.shape[1]
         break
-    model = SCA(config, input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
+    model = SCA(config, metric_num = metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
 
-
-#    train_loader = PyGDataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
-
- 
-#     model = FullGraphRCA(config, input_dim=10, metric_embbeding_dim = 64,instance_hidden_dim=64, service_hidden_dim=64).to(device)
-#     model.set_call_graph(call_graph,device)
-#     model.set_node_mapping(data_processor.instance_metric_mapping)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     root_cause_scorer = RootCauseScorer(alpha=1.0, beta=0.01,config=config)
-#     edge_index, _ = dense_to_sparse(torch.tensor(call_graph, dtype=torch.float))
 
     if args.mode == 'train':
         print("\n开始训练...")
@@ -179,14 +172,14 @@ if __name__ == "__main__":
             for x_window, instance_names, y_window in batch_pbar:
                 x_window = x_window.to(device)
                 y_window = y_window.to(device)
-                Lg, Ls, loss = model(x_window, y_window)
+                loss = model(x_window, y_window)
 
                 epoch_loss += loss.item()
                 batch_count += 1
                 
                 # 更新batch进度条显示的loss
-                batch_pbar.set_postfix({'loss': f'{loss.item():.4f}', 'Lg': f'{Lg.item():.4f}', 'Ls': f'{Ls.item():.4f}'})
-                
+                batch_pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
@@ -200,14 +193,12 @@ if __name__ == "__main__":
     # 方法1: 查看特定实例
     viz_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
 
-    # 查看指定实例的重构效果
     
 
     #加载模型
-    model = SCA(config, input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
+    model = SCA(config, metric_num=metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
     model.load_state_dict(torch.load(args.model_path),strict=False)
-    # model.set_call_graph(call_graph,device)
-    # model.set_node_mapping(data_processor.instance_metric_mapping)
+
     model.to(device)
     if args.dataset == 'all':
         path = '/home/kuangjunhua/research/data/aiops22_dataset/case_data.pkl'
@@ -242,7 +233,7 @@ if __name__ == "__main__":
             continue
         all_score = None
         for x_window, instance_names, y_window in test_loader:
-            #print("x_window:", x_window.shape)
+           
             x_window = x_window.to(device)
             y_window = y_window.to(device)
             y_window = y_window[0].to(device)
@@ -252,8 +243,9 @@ if __name__ == "__main__":
                 all_score = anomaly_score
             else:
                 all_score = all_score + anomaly_score
-        print("anomaly_score:", anomaly_score)
-        print("all_score shape:", all_score.shape)
+         
+
+
         all_score = all_score / len(test_loader)
         #修改为一维张量
         all_score = all_score.squeeze(-1).cpu()
@@ -270,32 +262,8 @@ if __name__ == "__main__":
         is_correct = any(any(pred.startswith(true) for pred in ans) for true in ([label] if isinstance(label, str) else label))
         
         # 打印预测结果
-        print_prediction_result(case_id + 1, ans, label, is_correct)
-        # case_path = os.path.join(case_pic_file,"case_"+str(case_id+1))
-        # if not os.path.exists(case_path):
-        #     os.makedirs(case_path)
-        # for a in ans:
-        #     target_instance = a
-        #     if target_instance in config.instance_metric_count_dict:
-        #         visualize_instance_reconstruction(
-        #             model=model,
-        #             data_loader=test_loader,
-        #             config=config,
-        #             device=device,
-        #             instance_name=target_instance,
-        #             save_path=os.path.join(case_path,target_instance+'.png')
-        #         )
-        # for l in label:
-        #     target_instance = l
-        #     if target_instance in config.instance_metric_count_dict:
-        #         visualize_instance_reconstruction(
-        #             model=model,
-        #             data_loader=test_loader,
-        #             config=config,
-        #             device=device,
-        #             instance_name=target_instance,
-        #             save_path=os.path.join(case_path,target_instance+'.png')
-        #         )
+        print_prediction_result(case_id, ans, label, is_correct)
+      
 
        
 
@@ -305,23 +273,5 @@ if __name__ == "__main__":
     print(f"Top-1 准确率: {accuracy[1]:.2%}")
     print(f"Top-5 准确率: {accuracy[5]:.2%}")
     print(f"day:{day}")
-
-    
-    # 可视化预测失败的案例
-    # if failed_cases:
-    #     print(f"\n发现 {len(failed_cases)} 个预测失败的案例，开始可视化...")
-    #     for case in failed_cases:
-    #         print(f"\n可视化 Case {case['case_id']} 的指标对比:")
-    #         plot_metrics_comparison(
-    #             case_data=case['case_data'],
-    #             pred_services=case['pred_services'],
-    #             true_services=case['true_services'],
-    #             instance_names=case['instance_names'],
-    #             window_size=args.window_size
-    #         )
-
-
-
-
 
     

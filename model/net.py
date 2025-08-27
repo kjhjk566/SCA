@@ -156,7 +156,6 @@ class gtnet(nn.Module):
         return x
     
     # 在 gtnet 类中新增：
-    @torch.no_grad()
     def encode(self, input, idx=None):
         seq_len = input.size(3)
         assert seq_len==self.seq_length, 'input sequence length not equal to preset sequence length'
@@ -174,6 +173,7 @@ class gtnet(nn.Module):
                     adp = self.gc(idx)
             else:
                 adp = self.predefined_A
+
 
         x = self.start_conv(input)
         skip = self.skip0(F.dropout(input, self.dropout, training=self.training))

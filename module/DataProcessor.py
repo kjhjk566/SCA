@@ -94,6 +94,27 @@ class DataProcessor:
             y_window = feature_data[start_idx + self.window_size]                  # 预测目标（单步预测）
             windows.append((x_window, y_window))
         return windows
+    def generate_windows_gnet(self):
+        """生成滑动时间窗口的数据对 (past, future)，输出形状 (B, C_in, N, T)"""
+        feature_data = torch.tensor(self.df.iloc[:, 1:].values, dtype=torch.float)  # [T, num_features]
+
+        windows = []
+        for start_idx in range(0, feature_data.size(0) - self.window_size, self.stride):
+            # [window_size, num_features]
+            x_window = feature_data[start_idx: start_idx + self.window_size]
+
+            # 转换为 (num_features, window_size)
+            x_window = x_window.T  # [N, T]
+
+            # 增加通道维度 C_in=1，并扩展 batch 维度
+            # 最终形状: (1, 1, N, T)
+            x_window = x_window.unsqueeze(0)  
+
+            # 单步预测目标: [num_features]
+            y_window = feature_data[start_idx + self.window_size]
+
+            windows.append((x_window, y_window))
+        return windows
 
 
 from torch.utils.data import Dataset
@@ -104,7 +125,7 @@ class TimeWindowDataset(Dataset):
         self.config = config
         
 
-        self.windows = self.data_processor.generate_windows()  # 生成滑动窗口数据对
+        self.windows = self.data_processor.generate_windows_gnet()  # 生成滑动窗口数据对
 
 
     def __len__(self):

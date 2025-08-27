@@ -1,3 +1,4 @@
+    
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,7 +31,22 @@ class NodeDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)
         )
+        self.predictor_gnet = nn.Sequential(
+            nn.Linear(input_dim,hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1)
+        )
 
+    def predict_next_step_gnet(self, x):
+        """
+        对输入特征 [B, total_metrics, input_dim] 进行单步预测，输出 [B, total_metrics]
+        """
+        # x: [B, total_metrics, input_dim]
+        out = self.predictor_gnet(x)
+        out = out.squeeze(-1)
+        return out
     def forward(self, h_instances, instance_names, metric_embeddings):
         """
         :param h_instances: [B, N, input_dim] - N是实例数量
