@@ -11,3 +11,5 @@ data/
 *.jsonl.gz
 *.jsonl.gz.part
 *.jsonl.gz.part.
+/case_pic
+/result

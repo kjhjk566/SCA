@@ -83,7 +83,7 @@ class dy_mixprop(nn.Module):
         self.mlp2 = linear((gdep+1)*c_in,c_out)
 
         self.gdep = gdep
-        self.dropout = dropout
+        self.dropout = dropou
         self.alpha = alpha
         self.lin1 = linear(c_in,c_in)
         self.lin2 = linear(c_in,c_in)
@@ -171,6 +171,8 @@ class graph_constructor(nn.Module):
 
     def forward(self, idx):
         if self.static_feat is None:
+           
+
             nodevec1 = self.emb1(idx)
             nodevec2 = self.emb2(idx)
         else:

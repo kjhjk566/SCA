@@ -11,7 +11,7 @@ class Config:
         self.batch_size = 16
         self.learning_rate = 5e-5
         self.epochs = 3
-        self.topk = 5
+        self.topk = 10
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.seed = 42
         if data_set == "aiops22":

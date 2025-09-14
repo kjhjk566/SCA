@@ -15,11 +15,11 @@ from model.net import gtnet
 
 
 class SCA(nn.Module):
-    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim,metric_num, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0):
+    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim,metric_num, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0,device = None):
         super(SCA, self).__init__()
         # 初始化 PodEmbedding 模块
-        self.transformer_encoder = TemporalEncoder(input_dim, window_size=5, hidden_dim=hidden_dim, num_layers=2, nhead=2, dropout=0.1)
-        self.pod_embedding = PodEmbedding(input_dim, hidden_dim, temperature, lambda_reg)
+        self.transformer_encoder = TemporalEncoder(hidden_dim=hidden_dim, output_dim=hidden_dim, num_layers=2, nhead=2, dropout=0.1)
+        self.pod_embedding = PodEmbedding(input_dim, hidden_dim)
         self.st_embedding = SpatioTemporalBlock(
             input_dim=input_dim,           # 每个节点的输入特征维度
             conv_out=8,             # 1D-CNN输出通道数
@@ -40,16 +40,16 @@ class SCA(nn.Module):
             gcn_true=True, 
             buildA_true=True, 
             gcn_depth=2, #从2->10
-            #num_nodes=len(config.all_enum.keys()), 
-            num_nodes=metric_num,
-            device=torch.device('cuda:1' if torch.cuda.is_available() else 'cpu'), 
+            num_nodes=len(config.all_enum.keys()), 
+            #num_nodes=metric_num,
+            device=device, 
             dropout=0.3, 
             subgraph_size=20, 
             dilation_exponential=1, 
             conv_channels=32, 
             residual_channels=32, 
             skip_channels=64, 
-            end_channels=128, 
+            end_channels=64, 
             seq_length=20, 
             in_dim=1, 
             out_dim=12, 
@@ -62,7 +62,7 @@ class SCA(nn.Module):
         self.lambda_granger = lambda_granger
         self.lambda_sparse = lambda_sparse
 
-        self.decoder = NodeDecoder(128,128, config.instance_metric_count_dict)  # 实例解码器
+        self.decoder = NodeDecoder(node_input_dim=64, hidden_dim=128, node_mapping=config.instance_metric_count_dict)  # 实例解码器
 
 
         # 其他 SCA 模块的初始化
@@ -94,20 +94,24 @@ class SCA(nn.Module):
         :return: output: Tensor of shape [B, 1]
         """
         # 第一步：通过 PodEmbedding 生成 pod-level 表示
-        #metric_embedding = self.transformer_encoder(x_window)  # [B, N, D]
+        #print('x_window shape:', x_window.shape)
+        metric_embedding = self.transformer_encoder(x_window)  # [B, N, D]
         #print("metric_embedding shape:", metric_embedding.shape)  # 输出形状检查
 
-        #pod_embedding, l1_reg = self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
-        # print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        pod_embedding= self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
+        #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
         #st_in = pod_embedding.permute(0, 3, 1, 2) 
+        pod_embedding = pod_embedding.unsqueeze(1)
 
-        st_out = self.gtnet.encode(x_window)
+        st_out = self.gtnet.encode(pod_embedding)
+        
         st_out = st_out.squeeze(-1)        # [16, 128, 541]
         st_out = st_out.permute(0, 2, 1)   # [16, 541, 128]
+        #print("st_out shape:", st_out.shape)
 
 
-        #instance_names = list(self.config.instance_metric_count_dict.keys())
-        predictions = self.decoder.predict_next_step_gnet(st_out)  # [B, total_metrics]
+        instance_names = list(self.config.instance_metric_count_dict.keys())
+        predictions = self.decoder.forward(h_instances =st_out,metric_embeddings=metric_embedding, instance_names=instance_names)  # [B, total_metrics]
         #print("predictions:", predictions.shape)
        
 

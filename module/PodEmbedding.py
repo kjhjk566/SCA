@@ -3,79 +3,81 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class PodEmbedding(nn.Module):
-    def __init__(self, input_dim, hidden_dim, temperature=0.5, lambda_reg=0.001):
+    def __init__(self, input_dim, hidden_dim, agg_type="weighted_mean"):
+        """
+        :param input_dim: 每个指标的时间序列长度 T
+        :param hidden_dim: Attention 的隐藏维度
+        :param agg_type: "weighted_mean" 或 "self_attention"
+        """
         super(PodEmbedding, self).__init__()
-        self.query = nn.Linear(input_dim, hidden_dim)
-        self.key = nn.Linear(input_dim, hidden_dim)
-        self.value = nn.Linear(input_dim, input_dim)
-        self.softmax = nn.Softmax(dim=1)
+        self.agg_type = agg_type
+        
+        # 加权平均
+        if agg_type == "weighted_mean":
+            self.weight_mlp = nn.Linear(input_dim, 1)
 
-        # Causal gate components
-        self.causal_mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-        self.temperature = temperature
-        self.lambda_reg = lambda_reg
+        # Self-Attention
+        elif agg_type == "self_attention":
+            self.query = nn.Linear(input_dim, hidden_dim)
+            self.key = nn.Linear(input_dim, hidden_dim)
+            self.value = nn.Linear(input_dim, hidden_dim)
+            self.softmax = nn.Softmax(dim=-1)
 
-    def gumbel_softmax_sample(self, logits):
-        U = torch.rand_like(logits)
-        gumbel_noise = -torch.log(-torch.log(U + 1e-9) + 1e-9)
-        y = logits + gumbel_noise
-        return torch.sigmoid(y / self.temperature)
-
-    def forward(self, metric_embeddings,mapping=None):
+    def forward(self, x, mapping=None):
         """
-        :param metric_embeddings: Tensor of shape [B, M, D]
-            - B: batch size
-            - M: number of metrics per pod
-            - D: embedding dimension per metric
-        :return: pod_embeddings: Tensor of shape [B, D], l1_reg: scalar regularization term
+        :param x: [B, M, T]
+                  B=batch, M=指标数, T=时间步
+        :param mapping: dict {pod_name: metric_count}
+        :return: pod_embeddings: [B, num_pods, D]
+                 D=hidden_dim (attention) 或 input_dim (weighted mean)
         """
+        B, M, T = x.shape
+
         if mapping is not None:
-            instance_embeddings = []
-            l1_regs = []
+            pod_embeddings = []
             start_idx = 0
-            for instance_name, metric_count in mapping.items():
+            for pod_name, metric_count in mapping.items():
                 end_idx = start_idx + metric_count
-                instance_metric_embeddings = metric_embeddings[:, start_idx:end_idx, :]  # [B, m_i, D]
+                metrics = x[:, start_idx:end_idx, :]   # [B, m_i, T]
 
-                Q = self.query(instance_metric_embeddings)
-                K = self.key(instance_metric_embeddings)
-                V = self.value(instance_metric_embeddings)
+                if self.agg_type == "weighted_mean":
+                    # [B, m_i, T] -> [B, m_i, 1]
+                    weights = torch.sigmoid(self.weight_mlp(metrics))
+                    weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+                    # 聚合 -> [B, T]
+                    pod_emb = (metrics * weights).sum(dim=1)
+
+                elif self.agg_type == "self_attention":
+                    Q = self.query(metrics)  # [B, m_i, H]
+                    K = self.key(metrics)    # [B, m_i, H]
+                    V = self.value(metrics)  # [B, m_i, H]
+
+                    attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (Q.shape[-1] ** 0.5)  # [B, m_i, m_i]
+                    attn_weights = self.softmax(attn_scores)
+                    context = torch.matmul(attn_weights, V)  # [B, m_i, H]
+                    pod_emb = context.mean(dim=1)            # [B, H]
+
+                pod_embeddings.append(pod_emb)
+                start_idx = end_idx
+
+            pod_embeddings = torch.stack(pod_embeddings, dim=1)  # [B, num_pods, D]
+
+        else:
+            # 没有 mapping 时，直接把所有指标看作一个 pod
+            if self.agg_type == "weighted_mean":
+                weights = torch.sigmoid(self.weight_mlp(x))
+                weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+                pod_embeddings = (x * weights).sum(dim=1, keepdim=True)  # [B, 1, T]
+
+            elif self.agg_type == "self_attention":
+                Q = self.query(x)  # [B, M, H]
+                K = self.key(x)    # [B, M, H]
+                V = self.value(x)  # [B, M, H]
 
                 attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (Q.shape[-1] ** 0.5)
                 attn_weights = self.softmax(attn_scores)
-                context = torch.matmul(attn_weights, V)
+                context = torch.matmul(attn_weights, V)  # [B, M, H]
+                pod_emb = context.mean(dim=1)            # [B, H]
+                pod_embeddings = pod_emb.unsqueeze(1)    # [B, 1, H]
 
-                rho = torch.sigmoid(self.causal_mlp(instance_metric_embeddings)).squeeze(-1)
-                beta = self.gumbel_softmax_sample(torch.log(rho + 1e-9))
-                beta = beta.unsqueeze(-1)
-                context = context * beta
-
-                pod_embedding = context.mean(dim=1)
-                instance_embeddings.append(pod_embedding)
-                l1_regs.append(rho.sum())
-                start_idx = end_idx
-
-            pod_embedding = torch.stack(instance_embeddings, dim=1)  # 保留所有实例的 embedding
-            l1_reg = self.lambda_reg * sum(l1_regs)
-            return pod_embedding, l1_reg
-        else:
-            Q = self.query(metric_embeddings)
-            K = self.key(metric_embeddings)
-            V = self.value(metric_embeddings)
-
-            attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (Q.shape[-1] ** 0.5)
-            attn_weights = self.softmax(attn_scores)
-            context = torch.matmul(attn_weights, V)
-
-            rho = torch.sigmoid(self.causal_mlp(metric_embeddings)).squeeze(-1)
-            beta = self.gumbel_softmax_sample(torch.log(rho + 1e-9))
-            beta = beta.unsqueeze(-1)
-            context = context * beta
-
-            pod_embedding = context.mean(dim=1)
-            l1_reg = self.lambda_reg * rho.sum()
-            return pod_embedding, l1_reg
+        return pod_embeddings

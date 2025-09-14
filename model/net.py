@@ -8,6 +8,8 @@ class gtnet(nn.Module):
         self.buildA_true = buildA_true
         self.num_nodes = num_nodes
         self.dropout = dropout
+        self.device = device
+       
         self.predefined_A = predefined_A
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -19,8 +21,8 @@ class gtnet(nn.Module):
         self.start_conv = nn.Conv2d(in_channels=in_dim,
                                     out_channels=residual_channels,
                                     kernel_size=(1, 1))
-        self.gc = graph_constructor(num_nodes, subgraph_size, node_dim, device, alpha=tanhalpha, static_feat=static_feat)
-
+        self.gc = graph_constructor(num_nodes, subgraph_size, node_dim, device, alpha=tanhalpha, static_feat=static_feat).to(device)
+        self.idx = torch.arange(self.num_nodes).to(device)
         self.seq_length = seq_length
         kernel_size = 7
         if dilation_exponential>1:
@@ -83,7 +85,7 @@ class gtnet(nn.Module):
             self.skipE = nn.Conv2d(in_channels=residual_channels, out_channels=skip_channels, kernel_size=(1, 1), bias=True)
 
 
-        self.idx = torch.arange(self.num_nodes).to(device)
+        
 
 
     def forward(self, input, idx=None):
@@ -168,6 +170,7 @@ class gtnet(nn.Module):
         if self.gcn_true:
             if self.buildA_true:
                 if idx is None:
+                    self.idx = self.idx.to(self.device)
                     adp = self.gc(self.idx)
                 else:
                     adp = self.gc(idx)

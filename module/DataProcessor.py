@@ -33,6 +33,9 @@ class DataProcessor:
         self.reorder_columns()
         
         self.feature_columns = self.df.columns[1:]  # 除去timestamp列
+        
+        # 保存指标名称顺序到config中
+        self.save_metric_names_to_config()
 
         
     def reorder_columns(self):
@@ -57,6 +60,45 @@ class DataProcessor:
         self.df = pd.concat([self.df.iloc[:, [0]], self.df[ordered_feature_cols]], axis=1)
         # 记录每个实例的指标数量
         self.instance_metric_count_dict = {inst: len(cols) for inst, cols in instance_name_map.items()}
+        
+        # 保存重新排序后的指标列名
+        self.ordered_feature_columns = ordered_feature_cols
+    
+    def save_metric_names_to_config(self):
+        """
+        将指标名称信息保存到config中，用于可视化
+        """
+        # 保存完整的指标列名列表（按顺序）
+        self.config.ordered_feature_names = self.ordered_feature_columns
+        
+        # 按实例分组保存指标名称
+        self.config.instance_metric_names = {}
+        start_idx = 0
+        
+        # 关键修复：必须按照 config.all_enum.keys() 的顺序遍历，与 reorder_columns 保持一致
+        for instance in self.config.all_enum.keys():
+            if instance in self.instance_metric_count_dict:
+                metric_count = self.instance_metric_count_dict[instance]
+                end_idx = start_idx + metric_count
+                instance_metrics = self.ordered_feature_columns[start_idx:end_idx]
+                
+                self.config.instance_metric_names[instance] = {
+                    'full_names': instance_metrics,  # 完整的列名（包含实例名）
+                    'start_idx': start_idx,          # 在全局指标数组中的起始索引
+                    'end_idx': end_idx,              # 在全局指标数组中的结束索引
+                    'metric_count': metric_count     # 指标数量
+                }
+                
+                start_idx = end_idx
+        
+        # 保存实例指标数量映射
+        self.config.instance_metric_count_dict = self.instance_metric_count_dict
+        
+        # print("指标名称信息已保存到config中:")
+        # for instance, info in self.config.instance_metric_names.items():
+        #     print(f"  {instance}: {len(info['full_names'])} 个指标 (索引: {info['start_idx']}-{info['end_idx']})")
+        #     for name in info['full_names']:
+        #         print(f"    - {name}")
     def generate_patches_tensor(self,time_series, patch_size, stride=None):
         """
         使用 PyTorch 将多变量时间序列张量划分为 patch。
@@ -115,6 +157,26 @@ class DataProcessor:
 
             windows.append((x_window, y_window))
         return windows
+    def generate_windows_normal(self):
+        """生成滑动时间窗口的数据对 (past, future)，输出形状 (B, C_in, N, T)"""
+        feature_data = torch.tensor(self.df.iloc[:, 1:].values, dtype=torch.float)  # [T, num_features]
+
+        windows = []
+        for start_idx in range(0, feature_data.size(0) - self.window_size, self.stride):
+            # [window_size, num_features]
+            x_window = feature_data[start_idx: start_idx + self.window_size]
+
+            # 转换为 (num_features, window_size)
+            x_window = x_window.T  # [N, T]
+
+            # 增加通道维度 C_in=1，并扩展 batch 维度
+          
+
+            # 单步预测目标: [num_features]
+            y_window = feature_data[start_idx + self.window_size]
+
+            windows.append((x_window, y_window))
+        return windows
 
 
 from torch.utils.data import Dataset
@@ -125,7 +187,7 @@ class TimeWindowDataset(Dataset):
         self.config = config
         
 
-        self.windows = self.data_processor.generate_windows_gnet()  # 生成滑动窗口数据对
+        self.windows = self.data_processor.generate_windows_normal()  # 生成滑动窗口数据对
 
 
     def __len__(self):

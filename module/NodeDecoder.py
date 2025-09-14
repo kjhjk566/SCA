@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class NodeDecoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, node_mapping,metric_embbeding_dim=64):
+    def __init__(self, node_input_dim, hidden_dim, node_mapping,metric_embbeding_dim=64):
         """
         :param input_dim: 输入实例向量维度 (比如128)
         :param hidden_dim: 中间隐层大小
@@ -13,26 +13,26 @@ class NodeDecoder(nn.Module):
         super(NodeDecoder, self).__init__()
         self.node_mapping = node_mapping
         self.hidden_dim = hidden_dim
-        self.input_dim = input_dim
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.node_input_dim = node_input_dim
+        self.fc1 = nn.Linear(node_input_dim, hidden_dim)
         
         # 实例编码器
         self.instance_encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(node_input_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
         
         # 指标预测器（共享）
         self.metric_predictor = nn.Sequential(
-            nn.Linear(hidden_dim + metric_embbeding_dim, hidden_dim),
+            nn.Linear(node_input_dim + metric_embbeding_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)
         )
         self.predictor_gnet = nn.Sequential(
-            nn.Linear(input_dim,hidden_dim),
+            nn.Linear(node_input_dim,hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -60,7 +60,7 @@ class NodeDecoder(nn.Module):
         assert B == B_metric, f"Batch sizes don't match: {B} vs {B_metric}"
         
         # 对实例特征进行编码
-        encoded_instances = self.instance_encoder(h_instances)  # [B, N, hidden_dim]
+        encoded_instances = h_instances  # [B, N, hidden_dim]
         
         # 为每个指标分配对应的实例特征
         batch_predictions = []
