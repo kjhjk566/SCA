@@ -51,7 +51,7 @@ class SCA(nn.Module):
             skip_channels=64, 
             end_channels=64, 
             seq_length=20, 
-            in_dim=1, 
+            in_dim=64, 
             out_dim=12, 
             layers=10, #从3->30
             propalpha=0.05, 
@@ -101,7 +101,11 @@ class SCA(nn.Module):
         pod_embedding= self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
         #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
         #st_in = pod_embedding.permute(0, 3, 1, 2) 
-        pod_embedding = pod_embedding.unsqueeze(1)
+        #pod_embedding = pod_embedding.unsqueeze(1)
+        print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        pod_embedding = pod_embedding.permute(0, 2, 1, 3)
+        print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        
 
         st_out = self.gtnet.encode(pod_embedding)
         
