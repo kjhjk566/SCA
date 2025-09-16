@@ -1,83 +1,124 @@
+# module/PodEmbedding.py  —— 新版，支持“逐时刻→序列”聚合
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 class PodEmbedding(nn.Module):
-    def __init__(self, input_dim, hidden_dim, agg_type="weighted_mean"):
+    def __init__(
+        self,
+        input_dim,              # = T（时间窗长度），保留该参数以兼容旧签名
+        hidden_dim,             # 兼容旧签名（self_attention 分支用），可忽略
+        agg_type="timewise_attn",
+        d_model=64,             # 每个时刻的实例嵌维度 D_out
+        dropout=0.0
+    ):
         """
-        :param input_dim: 每个指标的时间序列长度 T
-        :param hidden_dim: Attention 的隐藏维度
-        :param agg_type: "weighted_mean" 或 "self_attention"
+        支持两类聚合：
+        - timewise_attn: 对每个时刻，在指标维上做注意力池化（带掩码），输出 [B,N,d_model,T]
+        - timewise_mean: 对每个时刻，在指标维上做简单均值（带掩码），输出 [B,N,1,T] 或投到 d_model
         """
-        super(PodEmbedding, self).__init__()
+        super().__init__()
         self.agg_type = agg_type
-        
-        # 加权平均
-        if agg_type == "weighted_mean":
-            self.weight_mlp = nn.Linear(input_dim, 1)
+        self.d_model = d_model
 
-        # Self-Attention
-        elif agg_type == "self_attention":
-            self.query = nn.Linear(input_dim, hidden_dim)
-            self.key = nn.Linear(input_dim, hidden_dim)
-            self.value = nn.Linear(input_dim, hidden_dim)
-            self.softmax = nn.Softmax(dim=-1)
+        if agg_type == "timewise_attn":
+            # 将“单个指标在时刻 t 的标量/小特征”映射到 token（共享权重）
+            # 这里假定每个指标在每个时刻是“标量”，故 Linear(1->d_model)；若是多维，可改 Linear(Dm->d_model)
+            self.metric_proj = nn.Linear(1, d_model)
+            # 注意力打分器（逐指标）
+            self.score = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, 1)
+            )
+        elif agg_type == "timewise_mean":
+            # 简单均值：可选把标量先投到 d_model，再均值
+            self.metric_proj = nn.Linear(1, d_model)
+        else:
+            raise ValueError(f"Unsupported agg_type: {agg_type}")
 
     def forward(self, x, mapping=None):
         """
-        :param x: [B, M, T]
-                  B=batch, M=指标数, T=时间步
-        :param mapping: dict {pod_name: metric_count}
-        :return: pod_embeddings: [B, num_pods, D]
-                 D=hidden_dim (attention) 或 input_dim (weighted mean)
+        推荐输入契约：
+          x: [B, N, M_max, T]  —— 每个实例对齐到相同的 M_max，padding 的位置将用 mapping 做 mask
+          mapping: dict {instance_name: m_i} —— 每个实例的真实指标数
+        也兼容旧契约：
+          x: [B, M_total, T] + mapping （按 mapping 切回各实例，再逐时刻聚合）
+
+        输出：
+          pod_seq: [B, N, D_out, T]  —— 逐时刻的实例嵌入序列（D_out = d_model）
         """
-        B, M, T = x.shape
+        if x.dim() == 4:  # [B,N,M_max,T]
+            assert mapping is not None, "mapping is required for [B,N,M_max,T]"
+            return self._forward_batched_instances(x, mapping)
+        elif x.dim() == 3:  # [B,M_total,T] —— 旧契约
+            assert mapping is not None, "mapping is required for [B,M_total,T]"
+            return self._forward_flat_then_group(x, mapping)
+        else:
+            raise ValueError("x must be [B,N,M_max,T] or [B,M_total,T]")
 
-        if mapping is not None:
-            pod_embeddings = []
-            start_idx = 0
-            for pod_name, metric_count in mapping.items():
-                end_idx = start_idx + metric_count
-                metrics = x[:, start_idx:end_idx, :]   # [B, m_i, T]
+    # —— 实现：直接吃 [B,N,M_max,T] 的高效路径
+    def _forward_batched_instances(self, x, mapping):
+        B, N, M_max, T = x.shape
+        device = x.device
+        # 构造 mask: [N, M_max]，第 n 个实例前 m_n 有效
+        m_list = torch.tensor(list(mapping.values()), device=device)
+        idx = torch.arange(M_max, device=device).unsqueeze(0)      # [1,M_max]
+        valid_nm = (idx < m_list.unsqueeze(1)).bool()              # [N,M_max]
+        valid = valid_nm.unsqueeze(0).unsqueeze(-1)                # [B,N,M_max,1]
+        valid = valid.expand(B, -1, -1, T)                         # [B,N,M_max,T]
 
-                if self.agg_type == "weighted_mean":
-                    # [B, m_i, T] -> [B, m_i, 1]
-                    weights = torch.sigmoid(self.weight_mlp(metrics))
-                    weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
-                    # 聚合 -> [B, T]
-                    pod_emb = (metrics * weights).sum(dim=1)
+        # 到“时刻优先”的布局，便于做逐时刻聚合
+        # x_btmt: [B,N,T,M_max]
+        x_bntm = x.permute(0, 1, 3, 2).contiguous()
+        valid_bntm = valid.permute(0, 1, 3, 2).contiguous()        # [B,N,T,M_max]
 
-                elif self.agg_type == "self_attention":
-                    Q = self.query(metrics)  # [B, m_i, H]
-                    K = self.key(metrics)    # [B, m_i, H]
-                    V = self.value(metrics)  # [B, m_i, H]
+        # 将每个时刻的每个指标标量 -> token
+        # 先扩展出 feature 维度以适配 Linear(1 -> d_model)
+        x_feat = x_bntm.unsqueeze(-1)                              # [B,N,T,M_max,1]
+        H = self.metric_proj(x_feat)                               # [B,N,T,M_max,d_model]
 
-                    attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (Q.shape[-1] ** 0.5)  # [B, m_i, m_i]
-                    attn_weights = self.softmax(attn_scores)
-                    context = torch.matmul(attn_weights, V)  # [B, m_i, H]
-                    pod_emb = context.mean(dim=1)            # [B, H]
+        if self.agg_type == "timewise_attn":
+            # 打分并在指标维 softmax（带 mask）
+            logits = self.score(H)                                 # [B,N,T,M_max,1]
+            logits = logits.squeeze(-1)                            # [B,N,T,M_max]
 
-                pod_embeddings.append(pod_emb)
-                start_idx = end_idx
+            # mask 到非常小的数，避免参与 softmax
+            very_neg = torch.finfo(H.dtype).min
+            logits = logits.masked_fill(~valid_bntm, very_neg)
 
-            pod_embeddings = torch.stack(pod_embeddings, dim=1)  # [B, num_pods, D]
+            attn = torch.softmax(logits, dim=-1)                   # [B,N,T,M_max]
+            attn = attn.unsqueeze(-1)                              # [B,N,T,M_max,1]
+
+            # 加权求和（指标维）
+            z = (attn * H).sum(dim=3)                              # [B,N,T,d_model]
+            # 回到 [B,N,d_model,T]
+            z = z.permute(0, 1, 3, 2).contiguous()                 # [B,N,d_model,T]
+            return z
+
+            # 备注：若想观察每时刻“最重要指标”，topk(attn[..., t, :], k=K) 即可
+
+        elif self.agg_type == "timewise_mean":
+            # 对 padding 做 0 处理，再按有效个数均值
+            H = H * valid_bntm.unsqueeze(-1)                       # [B,N,T,M_max,d_model]
+            denom = valid_bntm.sum(dim=3, keepdim=True).clamp_min(1)  # [B,N,T,1]
+            z = H.sum(dim=3) / denom.unsqueeze(-1)                 # [B,N,T,d_model]
+            z = z.permute(0, 1, 3, 2).contiguous()                 # [B,N,d_model,T]
+            return z
 
         else:
-            # 没有 mapping 时，直接把所有指标看作一个 pod
-            if self.agg_type == "weighted_mean":
-                weights = torch.sigmoid(self.weight_mlp(x))
-                weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
-                pod_embeddings = (x * weights).sum(dim=1, keepdim=True)  # [B, 1, T]
+            raise ValueError(f"Unsupported agg_type: {self.agg_type}")
 
-            elif self.agg_type == "self_attention":
-                Q = self.query(x)  # [B, M, H]
-                K = self.key(x)    # [B, M, H]
-                V = self.value(x)  # [B, M, H]
-
-                attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (Q.shape[-1] ** 0.5)
-                attn_weights = self.softmax(attn_scores)
-                context = torch.matmul(attn_weights, V)  # [B, M, H]
-                pod_emb = context.mean(dim=1)            # [B, H]
-                pod_embeddings = pod_emb.unsqueeze(1)    # [B, 1, H]
-
-        return pod_embeddings
+    # —— 兼容旧契约 [B,M_total,T]：按 mapping 切成 [B,N,m_i,T] 再复用上面的逻辑
+    def _forward_flat_then_group(self, x, mapping):
+        B, M_total, T = x.shape
+        pods = []
+        start = 0
+        for _, m_i in mapping.items():
+            seg = x[:, start:start+m_i, :]                         # [B,m_i,T]
+            seg = seg.unsqueeze(1)                                 # [B,1,m_i,T]
+            z = self._forward_batched_instances(seg, {"dummy": m_i})  # [B,1,d_model,T]
+            pods.append(z)                                         # list of [B,1,d_model,T]
+            start += m_i
+        return torch.cat(pods, dim=1)                              # [B,N,d_model,T]
