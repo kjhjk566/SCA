@@ -102,9 +102,9 @@ class SCA(nn.Module):
         #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
         #st_in = pod_embedding.permute(0, 3, 1, 2) 
         #pod_embedding = pod_embedding.unsqueeze(1)
-        print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        
         pod_embedding = pod_embedding.permute(0, 2, 1, 3)
-        print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
         
 
         st_out = self.gtnet.encode(pod_embedding)
@@ -126,15 +126,57 @@ class SCA(nn.Module):
 
     def loss(self, predictions, y_window):
         """
-        计算损失函数
-        :param predictions: 模型预测结果
-        :param y_window: 真实标签
-        :return: 损失值
+        组合任务损失 + 因果图正则（可开关）
         """
-        # 使用 MSELoss 计算损失
-        loss_fn = nn.MSELoss()
-        #Lg,Ls,L =  self.get_causal_gate_loss()
-        loss = loss_fn(predictions, y_window)
+        device = predictions.device
+        # 1) 主任务
+        task_loss = F.mse_loss(predictions, y_window)
+
+        # 2) 从 gtnet 的 CausalGraphLearner 里取正则
+        #    注意：这些值依赖于前向中已调用过 self.gtnet.encode(...)，
+        #    因为 learner 会在 forward() 时缓存最近一次的 A^(tau)
+        reg_l1 = torch.tensor(0.0, device=device)
+        reg_prior = torch.tensor(0.0, device=device)
+        reg_dag = torch.tensor(0.0, device=device)
+        reg_ent = torch.tensor(0.0, device=device)
+
+        if hasattr(self.gtnet, "causal_learner"):
+            cl = self.gtnet.causal_learner
+            # 稀疏/小残差：二选一
+            if hasattr(cl, "l1_learned"):
+                reg_l1 = cl.l1_learned()
+            # 若你更倾向贴近先验，可改用：
+            # if hasattr(cl, "l1_residual_vs_prior"):
+            #     reg_l1 = cl.l1_residual_vs_prior()
+
+            if hasattr(cl, "dag_penalty"):
+                reg_dag = cl.dag_penalty()  # 返回 h(A)
+
+            # 行熵：让每行更尖锐（可选）
+            if hasattr(cl, "get_last_graph"):
+                A_last = cl.get_last_graph()             # [L,N,N]
+                eps = 1e-12
+                P = A_last.clamp_min(eps)
+                row_ent = -(P * P.log()).sum(dim=-1)     # [L,N]
+                reg_ent = row_ent.mean()
+
+            # 若用了 set_causal_prior，可额外加 prior 距离（可选）
+            # if getattr(cl, "use_prior", False) and hasattr(cl, "l1_residual_vs_prior"):
+            #     reg_prior = cl.l1_residual_vs_prior()
+
+        # 3) 系数（可拉到 config 里）
+        lambda_l1    = 3e-4
+        lambda_prior = 0.0   # 如果上面打开 reg_prior，这里给一个 1e-4 ~ 5e-4
+        lambda_dag   = 1e-2
+        lambda_ent   = 1e-3
+
+        loss = (
+            task_loss
+            + lambda_l1 * reg_l1
+            + lambda_prior * reg_prior
+            + lambda_dag * (reg_dag ** 2)  # 用 h(A)^2
+            + lambda_ent * reg_ent
+        )
         return loss
 
     # def get_causal_gate_loss(self):

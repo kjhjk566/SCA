@@ -132,76 +132,7 @@ class gtnet(nn.Module):
 
 
 
-    def forward(self, input, idx=None):
-        seq_len = input.size(3)
-        assert seq_len==self.seq_length, 'input sequence length not equal to preset sequence length'
-
-        if self.seq_length<self.receptive_field:
-            input = nn.functional.pad(input,(self.receptive_field-self.seq_length,0,0,0))
-
-
-
-        """
-        自动学习邻接矩阵
-        若gcn_true和buildA_true均为True，则自动学习邻接矩阵
-        否则直接使用已定义好的邻接矩阵predefined_A
-        """
-
-        if self.gcn_true:
-            if self.buildA_true:
-                if idx is None:
-                    adp = self.gc(self.idx)
-                else:
-                    adp = self.gc(idx)
-            else:
-                adp = self.predefined_A
-
-        x = self.start_conv(input)
-        
-        """
-        得到初始skip
-        """
-
-        skip = self.skip0(F.dropout(input, self.dropout, training=self.training))
-        for i in range(self.layers):
-
-            """
-            时空特征提取部分
-            """
-
-            residual = x
-            filter = self.filter_convs[i](x)
-            filter = torch.tanh(filter)
-            gate = self.gate_convs[i](x)
-            gate = torch.sigmoid(gate)
-            x = filter * gate
-            x = F.dropout(x, self.dropout, training=self.training)
-            s = x
-            s = self.skip_convs[i](s)
-            skip = s + skip
-
-            """
-            图卷积部分
-            """
-
-            if self.gcn_true:
-                x = self.gconv1[i](x, adp)+self.gconv2[i](x, adp.transpose(1,0))
-            else:
-                x = self.residual_convs[i](x)
-
-            x = x + residual[:, :, :, -x.size(3):]
-            if idx is None:
-                x = self.norm[i](x,self.idx)
-            else:
-                x = self.norm[i](x,idx)
-
-        skip = self.skipE(x) + skip
-        x = F.relu(skip)
-        x = F.relu(self.end_conv_1(x))
-        # x = self.end_conv_2(x)
-        return x
-    
-    # 在 gtnet 类中新增：
+  
     def encode(self, input, idx=None):
         seq_len = input.size(3)
         assert seq_len==self.seq_length, 'input sequence length not equal to preset sequence length'
@@ -236,7 +167,8 @@ class gtnet(nn.Module):
             s = self.skip_convs[i](s)
             skip = s + skip
             if self.gcn_true:
-                x = self.gconv1[i](x, adp)+self.gconv2[i](x, adp.transpose(1,0))
+                #x = self.gconv1[i](x, adp)+self.gconv2[i](x, adp.transpose(1,0))
+                x = self._lagged_graph_fuse(x)
             else:
                 x = self.residual_convs[i](x)
 
@@ -247,7 +179,7 @@ class gtnet(nn.Module):
                 x = self.norm[i](x,idx)
                 
         # --- NEW: fuse multi-lag causal graph propagation on residual feature map ---
-        x = self._lagged_graph_fuse(x)
+        
 
         skip = self.skipE(x) + skip
         x = F.relu(skip)
