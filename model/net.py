@@ -1,5 +1,5 @@
 from model.layer import *
-
+from model.CausalGraphLearner import CausalGraphLearner
 
 class gtnet(nn.Module):
     def __init__(self, gcn_true, buildA_true, gcn_depth, num_nodes, device, predefined_A=None, static_feat=None, dropout=0.3, subgraph_size=20, node_dim=40, dilation_exponential=1, conv_channels=32, residual_channels=32, skip_channels=64, end_channels=128, seq_length=12, in_dim=2, out_dim=12, layers=3, propalpha=0.05, tanhalpha=3, layer_norm_affline=True):
@@ -9,7 +9,6 @@ class gtnet(nn.Module):
         self.num_nodes = num_nodes
         self.dropout = dropout
         self.device = device
-       
         self.predefined_A = predefined_A
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -23,6 +22,23 @@ class gtnet(nn.Module):
                                     kernel_size=(1, 1))
         self.gc = graph_constructor(num_nodes, subgraph_size, node_dim, device, alpha=tanhalpha, static_feat=static_feat).to(device)
         self.idx = torch.arange(self.num_nodes).to(device)
+                # ===== Causal (multi-lag) graph learner & a dedicated propagation head =====
+        self.use_causal_graph = True    # switch on/off easily
+        self.num_lags = 2               # you can expose as init arg
+        self.causal_learner = CausalGraphLearner(
+            num_nodes=num_nodes,
+            embed_dim=32,
+            num_lags=self.num_lags,
+            topk_per_row=subgraph_size,   # reuse k like subgraph_size or set to 15
+            nonneg=True,
+            use_prior=False,
+            per_lag_eta=True,
+        )
+        # a separate mixprop to apply on residual feature space
+        self.lag_mixprop = mixprop(residual_channels, residual_channels, gcn_depth, dropout, propalpha)
+        # gate for fusing graph-propagated signal
+        self.theta_gc = nn.Parameter(torch.tensor(0.3))
+
         self.seq_length = seq_length
         kernel_size = 7
         if dilation_exponential>1:
@@ -81,11 +97,39 @@ class gtnet(nn.Module):
             self.skipE = nn.Conv2d(in_channels=residual_channels, out_channels=skip_channels, kernel_size=(1, self.seq_length-self.receptive_field+1), bias=True)
 
         else:
+
+        
             self.skip0 = nn.Conv2d(in_channels=in_dim, out_channels=skip_channels, kernel_size=(1, self.receptive_field), bias=True)
             self.skipE = nn.Conv2d(in_channels=residual_channels, out_channels=skip_channels, kernel_size=(1, 1), bias=True)
 
 
-        
+    @torch.no_grad()
+    def set_causal_prior(self, A_prior: torch.Tensor, cand_mask: torch.Tensor = None, row_normalize_prior: bool = True):
+        """
+        Optionally provide external prior (call graph / deploy). Shapes: [N,N] or [L,N,N].
+        """
+        self.causal_learner.set_prior(A_prior, cand_mask, row_normalize_prior)
+
+    def _lagged_graph_fuse(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [B, C(residual_channels), N, T]
+        Returns x fused with lagged graph propagation using {A^(tau)}.
+        """
+        if not self.use_causal_graph:
+            return x
+        A_list = self.causal_learner()     # list of [N,N], len=L
+        B, C, N, T = x.shape
+        y_total = 0
+        for tau, A_tau in enumerate(A_list, start=1):
+            if T - tau <= 0:
+                continue
+            xs = x[..., : T - tau]                     # strictly past
+            y  = self.lag_mixprop(xs, A_tau)           # [B,C,N,T-tau]
+            y  = F.pad(y, (tau, 0, 0, 0, 0, 0))        # right-align along time
+            y_total = y_total + y
+        return x + torch.sigmoid(self.theta_gc) * y_total
+
+
 
 
     def forward(self, input, idx=None):
@@ -201,6 +245,9 @@ class gtnet(nn.Module):
                 x = self.norm[i](x,self.idx)
             else:
                 x = self.norm[i](x,idx)
+                
+        # --- NEW: fuse multi-lag causal graph propagation on residual feature map ---
+        x = self._lagged_graph_fuse(x)
 
         skip = self.skipE(x) + skip
         x = F.relu(skip)

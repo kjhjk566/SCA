@@ -83,7 +83,7 @@ class dy_mixprop(nn.Module):
         self.mlp2 = linear((gdep+1)*c_in,c_out)
 
         self.gdep = gdep
-        self.dropout = dropou
+        self.dropout = dropout
         self.alpha = alpha
         self.lin1 = linear(c_in,c_in)
         self.lin2 = linear(c_in,c_in)
