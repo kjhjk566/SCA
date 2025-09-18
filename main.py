@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    root_cause_scorer = RootCauseScorer(alpha=1.0, beta=0.01,config=config)
+    root_cause_scorer = RootCauseScorer(alpha=1.0, beta=0.01,config=config,device=device)
 
     if args.mode == 'train':
         print("\n开始训练...")
@@ -187,7 +187,10 @@ if __name__ == "__main__":
             # 计算并输出每个epoch的平均loss
             avg_loss = epoch_loss / batch_count
             print(f"Epoch {epoch+1}/{args.epochs}, Average Loss: {avg_loss:.4f}")
-            
+        A_list = model.gtnet.causal_learner._last_As
+        print("学习到的因果图（每个滞后）：")
+        for i, A in enumerate(A_list, start=1):
+            print(f"A^( {i} ):\n", A.detach().cpu().numpy())
         torch.save(model.state_dict(), args.model_path)
         print(f"模型已保存到: {args.model_path}")
     # 方法1: 查看特定实例
@@ -197,8 +200,8 @@ if __name__ == "__main__":
     
 
     #加载模型
-    model = SCA(config,device = device, metric_num=metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
-    model.load_state_dict(torch.load(args.model_path),strict=False)
+    # model = SCA(config,device = device, metric_num=metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
+    # model.load_state_dict(torch.load(args.model_path),strict=False)
     
     target_instance = 'cartservice-1'  # 修正实例名称
     
@@ -235,6 +238,8 @@ if __name__ == "__main__":
     model.eval()
     all_ans = []
     all_labels = []
+    #A_list = model.gtnet.causal_learner._last_As
+    print("A_list len:",len(A_list))
     
 
     
@@ -265,8 +270,6 @@ if __name__ == "__main__":
     # 用于保存结果的列表
     results_data = []
     
-    with open('/home/kuangjunhua/research/data/aiops25/20/deploy_graph.pkl', 'rb') as f:
-        graph = pickle.load(f)
     for case_id, (case_data, label, ts) in enumerate(tqdm(test_case)):
         all_labels.append(label)
 
@@ -306,7 +309,10 @@ if __name__ == "__main__":
         all_score = all_score.squeeze(-1).cpu()
         #print('all_score',all_score)
 
-        ans, ans_details,label_anomaly_info = root_cause_scorer.get_ans_from_loss(all_score)
+
+        #ans, ans_details,label_anomaly_info = root_cause_scorer.get_ans_from_loss(all_score)
+        ans, ans_details,label_anomaly_info = root_cause_scorer.get_root_cause_by_walk(all_score, A_list)
+
         print("label_anomaly_info:",label_anomaly_info)
         # 将根因分析结果保存到文本文件
         with open(detailed_result_file, 'a', encoding='utf-8') as f:
@@ -327,12 +333,13 @@ if __name__ == "__main__":
                         f.write(f"    {metric_info['rank']}. {metric_info['metric_name']}: {metric_info['error_value']:.6f}")
             
             f.write("=== 根因分析结果 ===\n\n")
-            for instance_name, details in ans_details.items():
-                f.write(f"排名 {details['rank']}: {instance_name} (实例损失: {details['instance_loss']:.6f})\n")
-                f.write("  前3个异常指标:\n")
-                for metric_info in details['top_error_metrics']:
-                    f.write(f"    {metric_info['rank']}. {metric_info['metric_name']}: {metric_info['error_value']:.6f}\n")
-                f.write("\n")
+            if ans_details:
+                for instance_name, details in ans_details.items():
+                    f.write(f"排名 {details['rank']}: {instance_name} (实例损失: {details['instance_loss']:.6f})\n")
+                    f.write("  前3个异常指标:\n")
+                    for metric_info in details['top_error_metrics']:
+                        f.write(f"    {metric_info['rank']}. {metric_info['metric_name']}: {metric_info['error_value']:.6f}\n")
+                    f.write("\n")
             
             # 检查预测是否正确
             is_correct = any(any(pred.startswith(true) for pred in ans) for true in ([label] if isinstance(label, str) else label))
