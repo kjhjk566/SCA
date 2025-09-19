@@ -15,7 +15,8 @@ from model.net import gtnet
 
 
 class SCA(nn.Module):
-    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim,metric_num, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0,device = None):
+    def __init__(self,config, input_dim, hidden_dim, sca_hidden_dim,metric_num, temperature=0.5, lambda_reg=0.001,lambda_granger = 0.5,lambda_sparse = 1.0,device = None,adj = None):
+       
         super(SCA, self).__init__()
         # 初始化 PodEmbedding 模块
         self.transformer_encoder = TemporalEncoder(hidden_dim=hidden_dim, output_dim=hidden_dim, num_layers=2, nhead=2, dropout=0.1)
@@ -39,6 +40,7 @@ class SCA(nn.Module):
         self.gtnet = gtnet(
             gcn_true=True, 
             buildA_true=True, 
+            predefined_A = adj,
             gcn_depth=2, #从2->10
             num_nodes=len(config.all_enum.keys()), 
             #num_nodes=metric_num,

@@ -32,6 +32,57 @@ from module.RootCauseScorer import RootCauseScorer
 #day = 7
 
 
+import torch
+
+def print_instance_edges(A: torch.Tensor, instance_names, output_dir=None, threshold=1e-6, topk=None):
+    """
+    打印因果图中的边：谁 -> 谁 : 边权
+    Args:
+        A: [N, N] 或 [L, N, N] 张量，A[i, j] 表示 j -> i 的边权，或 A[l, i, j] 表示第 l 张图的 j -> i
+        instance_names: List[str]，长度 N，对应行/列的实例名
+        output_dir: str，结果保存的目录路径，将结果写入 output_dir/adj.txt
+        threshold: 过滤掉权重过小的边（默认 1e-6）
+        topk: 如果指定，只输出权重最大的 topk 条边
+    """
+    # 判断 A 维度
+   
+
+    all_edges = []
+    for idx, A_mat in enumerate(A_list):
+ 
+        N = A_mat.size(0)
+        edges = []
+        for i in range(N):  # 行：目标
+            for j in range(N):  # 列：来源
+                if i == j:
+                    continue  # 去掉自环
+                weight = A_mat[i, j].item()
+                if weight > threshold:
+                    edges.append((instance_names[j], instance_names[i], weight))  # j -> i
+
+        # 按权重排序
+        edges = sorted(edges, key=lambda x: x[2], reverse=True)
+
+        # 如果指定 topk，只保留前 k 条
+        if topk is not None:
+            edges = edges[:topk]
+
+        all_edges.append(edges)
+
+        # 写入文件
+        if output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+            adj_path = os.path.join(output_dir, f"adj_{idx+1}.txt")
+            with open(adj_path, "w", encoding="utf-8") as f:
+                for src, tgt, w in edges:
+                    f.write(f"{src} -> {tgt}: {w:.4f}\n")
+        else:
+            # 打印
+            print(f"==== 第 {idx+1} 张因果图 ====")
+            for src, tgt, w in edges:
+                print(f"{src} -> {tgt}: {w:.4f}")
+
+    return all_edges if len(all_edges) > 1 else all_edges[0]
 
 def parse_args():
     """
@@ -119,26 +170,13 @@ if __name__ == "__main__":
     config.batch_size = args.batch_size
     trace_df = None
     deploy_df = None
-    # trace_df = pd.read_csv(os.path.join(args.data_path, 'trace_jaeger-span_new_2.csv'))
-    # deploy_df = pd.read_csv(f'/home/kuangjunhua/research/data/aiops2022-pre/2022-05-0{day}/cloudbed/metric/container/kpi_container_cpu_cfs_periods.csv')
-    
-    # parser = TraceParser(trace_df,deploy_df)
-    # #parser.parse_trace(os.path.join(args.data_path, 'trace_jaeger-span_new_2.pkl'))
-    # parser.extract_node_service_mapping(os.path.join(args.data_path, 'deploy.pkl'))
-    
-    # s = StaticCallGraphBuilder(parser.parsed_trace,parser.deploy_edges, config)
-    # call_graph = s.get_call_graph()
-    
-    #原始数据
-    # if args.dataset == 'all':
-    #     path = '/home/kuangjunhua/research/data/aiops22_dataset/train_df.pkl'
-    # elif args.dataset == 'normal':
-    #     path = os.path.join(args.data_path, 'normal_data.pkl')
-    path = os.path.join(args.data_path, 'normal_data.pkl')
-    
-    
-    with open(path, 'rb') as f:
+    data_path = os.path.join(args.data_path, 'normal_data.pkl')
+    adj_path = os.path.join(args.data_path, 'adj.pkl')
+
+    with open(data_path, 'rb') as f:
         data = pickle.load(f)
+    with open(adj_path, 'rb') as f:
+        adj = pickle.load(f)
     print("raw_data.shape:",data.shape)
     #数据是否有nan
     print("数据是否有nan:",data.isna().sum().sum())
@@ -157,7 +195,7 @@ if __name__ == "__main__":
         print("y_window:", y_window.shape)
         metric_num = y_window.shape[1]
         break
-    model = SCA(config,device =device, metric_num = metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
+    model = SCA(config,device =device,adj = adj, metric_num = metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -369,7 +407,8 @@ if __name__ == "__main__":
         
         # 打印预测结果到控制台
         print_prediction_result(case_id + 1, ans, label, is_correct)
-        
+
+       
         #case重构画图
         # case_path = os.path.join(case_pic_file,"case_"+str(case_id+1))
         # if not os.path.exists(case_path):
@@ -401,6 +440,10 @@ if __name__ == "__main__":
     result_df.to_csv(csv_path, index=False, encoding='utf-8')
     print(f"\n结果已保存到: {csv_path}")
     print(f"详细根因分析结果已保存到: {detailed_result_file}")
+    A=model.gtnet.causal_learner._last_As
+
+    print_instance_edges(A, instance_names=list(config.instance_metric_names.keys()), output_dir=result_dir, threshold=1e-6, topk=5)
+        
 
     # 计算并打印总体准确率
     accuracy = evaluate_topk_accuracy(all_ans, all_labels, topk_list=[1, 5,10])

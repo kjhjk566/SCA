@@ -31,9 +31,10 @@ class gtnet(nn.Module):
             num_lags=self.num_lags,
             topk_per_row=subgraph_size,   # reuse k like subgraph_size or set to 15
             nonneg=True,
-            use_prior=False,
+            use_prior=True,
             per_lag_eta=True,
         )
+        self.causal_learner.set_prior(self.predefined_A)  # initialize as all-zero (no prior)
         # a separate mixprop to apply on residual feature space
         self.lag_mixprop = mixprop(residual_channels, residual_channels, gcn_depth, dropout, propalpha)
         # gate for fusing graph-propagated signal
@@ -110,14 +111,13 @@ class gtnet(nn.Module):
         """
         self.causal_learner.set_prior(A_prior, cand_mask, row_normalize_prior)
 
-    def _lagged_graph_fuse(self, x: torch.Tensor) -> torch.Tensor:
+    def _lagged_graph_fuse(self, x: torch.Tensor,A_list) -> torch.Tensor:
         """
         x: [B, C(residual_channels), N, T]
         Returns x fused with lagged graph propagation using {A^(tau)}.
         """
         if not self.use_causal_graph:
             return x
-        A_list = self.causal_learner()     # list of [N,N], len=L
         B, C, N, T = x.shape
         y_total = 0
         for tau, A_tau in enumerate(A_list, start=1):
@@ -143,14 +143,8 @@ class gtnet(nn.Module):
 
 
         if self.gcn_true:
-            if self.buildA_true:
-                if idx is None:
-                    self.idx = self.idx.to(self.device)
-                    adp = self.gc(self.idx)
-                else:
-                    adp = self.gc(idx)
-            else:
-                adp = self.predefined_A
+            A_list = self.causal_learner()     # list of [N,N], len=L
+
 
 
         x = self.start_conv(input)
@@ -168,7 +162,7 @@ class gtnet(nn.Module):
             skip = s + skip
             if self.gcn_true:
                 #x = self.gconv1[i](x, adp)+self.gconv2[i](x, adp.transpose(1,0))
-                x = self._lagged_graph_fuse(x)
+                x = self._lagged_graph_fuse(x,A_list)
             else:
                 x = self.residual_convs[i](x)
 
