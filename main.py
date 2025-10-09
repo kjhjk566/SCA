@@ -241,9 +241,9 @@ if __name__ == "__main__":
     # model = SCA(config,device = device, metric_num=metric_num,input_dim=x_window.shape[-1], hidden_dim=64, sca_hidden_dim=64).to(device)
     # model.load_state_dict(torch.load(args.model_path),strict=False)
     
-    target_instance = 'cartservice-1'  # 修正实例名称
+    #target_instance = 'tidb_tikv'  # 修正实例名称
     
-    # # 方法1: 原来的可视化方法（显示滑动窗口的重构效果）
+    # 方法1: 原来的可视化方法（显示滑动窗口的重构效果）
     # visualize_instance_reconstruction(
     #     model=model,
     #     data_loader=viz_loader,
@@ -349,7 +349,7 @@ if __name__ == "__main__":
 
 
         #ans, ans_details,label_anomaly_info = root_cause_scorer.get_ans_from_loss(all_score)
-        ans, ans_details,label_anomaly_info = root_cause_scorer.get_root_cause_by_walk(all_score, A_list)
+        ans, ans_details,label_anomaly_info = root_cause_scorer.get_root_cause_by_walk(all_score, A_list,label)
 
         print("label_anomaly_info:",label_anomaly_info)
         # 将根因分析结果保存到文本文件
@@ -410,31 +410,34 @@ if __name__ == "__main__":
 
        
         #case重构画图
-        # case_path = os.path.join(case_pic_file,"case_"+str(case_id+1))
-        # if not os.path.exists(case_path):
-        #     os.makedirs(case_path)
-        # for a in ans:
-        #     target_instance = a
-        #     if target_instance in config.instance_metric_count_dict:
-        #         visualize_instance_reconstruction(
-        #             model=model,
-        #             data_loader=test_loader,
-        #             config=config,
-        #             device=device,
-        #             instance_name=target_instance,
-        #             save_path=os.path.join(case_path,target_instance+'.png')
-        #         )
-        # for l in label:
-        #     target_instance = l
-        #     if target_instance in config.instance_metric_count_dict:
-        #         visualize_instance_reconstruction(
-        #             model=model,
-        #             data_loader=test_loader,
-        #             config=config,
-        #             device=device,
-        #             instance_name=target_instance,
-        #             save_path=os.path.join(case_path,target_instance+'.png')
-        #         )
+        pic_case_id = -1
+        case_path = os.path.join(case_pic_file,"case_"+str(case_id+1))
+        if not os.path.exists(case_path):
+            os.makedirs(case_path)
+        if case_id+1 == pic_case_id:
+            for a in ans:
+                target_instance = a
+                if target_instance in config.instance_metric_count_dict:
+                    visualize_instance_reconstruction(
+                        model=model,
+                        data_loader=test_loader,
+                        config=config,
+                        device=device,
+                        instance_name=target_instance,
+                        save_path=os.path.join(case_path,target_instance+'.png')
+                    )
+            for l in label:
+                target_instance = l
+                if target_instance in config.instance_metric_count_dict:
+                    visualize_instance_reconstruction(
+                        model=model,
+                        data_loader=test_loader,
+                        config=config,
+                        device=device,
+                        instance_name=target_instance,
+                        save_path=os.path.join(case_path,target_instance+'.png')
+                    )
+
     result_df = pd.DataFrame(results_data)
     csv_path = os.path.join(result_dir, f'prediction_results_{args.dataset}_{args.day}.csv')
     result_df.to_csv(csv_path, index=False, encoding='utf-8')
@@ -442,7 +445,7 @@ if __name__ == "__main__":
     print(f"详细根因分析结果已保存到: {detailed_result_file}")
     A=model.gtnet.causal_learner._last_As
 
-    print_instance_edges(A, instance_names=list(config.instance_metric_names.keys()), output_dir=result_dir, threshold=1e-6, topk=5)
+    print_instance_edges(A, instance_names=list(config.instance_metric_names.keys()), output_dir=result_dir, threshold=1e-6)
         
 
     # 计算并打印总体准确率

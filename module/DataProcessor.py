@@ -22,12 +22,7 @@ class DataProcessor:
         self.small_window_size = small_window_size
 
         self.df = df
-        # 归一化特征列
-        feature_data = self.df.iloc[:, 1:]
-        min_vals = feature_data.min()
-        max_vals = feature_data.max()
-        normalized_features = (feature_data - min_vals) / (max_vals - min_vals + 1e-8)  # 防止除0
-        self.df.iloc[:, 1:] = normalized_features
+       
         # 重新排列列
         #print("before reorder_columns:",self.df.shape)
         self.reorder_columns()

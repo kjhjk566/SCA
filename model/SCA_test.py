@@ -242,7 +242,7 @@ class SCA(nn.Module):
         return top5_instances
 
 
-        # 在你的 SCA.py 文件中添加这个函数
+
     def calculate_metric_loss(self, x_window, y_window, loss_type='mse'):
         """
         计算指标级别的误差
@@ -265,6 +265,6 @@ class SCA(nn.Module):
         elif loss_type == 'rmse':
             metric_losses = torch.sqrt(F.mse_loss(predictions, y_true, reduction='none'))
         else:
-            raise ValueError(f"Unsupported loss type: {self.loss_type}")
+            raise ValueError(f"Unsupported loss type: {loss_type}")
 
         return metric_losses

@@ -16,7 +16,7 @@ class Config:
         self.seed = 42
         if data_set == "aiops22":
             self.all_enum = {'emailservice-0': 0, 'emailservice2-0': 1, 'emailservice-2': 2, 'emailservice-1': 3, 'adservice-0': 4, 'adservice2-0': 5, 'adservice-2': 6, 'adservice-1': 7, 'checkoutservice-0': 8, 'checkoutservice2-0': 9, 'checkoutservice-2': 10, 'checkoutservice-1': 11, 'paymentservice-0': 12, 'paymentservice2-0': 13, 'paymentservice-2': 14, 'paymentservice-1': 15, 'productcatalogservice-0': 16, 'productcatalogservice2-0': 17, 'productcatalogservice-2': 18, 'productcatalogservice-1': 19, 'shippingservice-0': 20, 'shippingservice2-0': 21, 'shippingservice-2': 22, 'shippingservice-1': 23, 'frontend-0': 24, 'frontend2-0': 25, 'frontend-2': 26, 'frontend-1': 27, 'recommendationservice-0': 28, 'recommendationservice2-0': 29, 'recommendationservice-2': 30, 'recommendationservice-1': 31, 'cartservice-0': 32, 'cartservice2-0': 33, 'cartservice-2': 34, 'cartservice-1': 35, 'currencyservice-0': 36, 'currencyservice2-0': 37, 'currencyservice-2': 38, 'currencyservice-1': 39, 'node-1': 40, 'node-2': 41, 'node-3': 42, 'node-4': 43, 'node-5': 44, 'node-6': 45}
-        elif data_set == "aiops25":
+        elif data_set == "aiops25" or data_set == "aiops25_6":
             self.all_enum = {
                 'adservice-0': 0, 'adservice-1': 1, 'adservice-2': 2,
                 'aiops-k8s-01': 3, 'aiops-k8s-02': 4, 'aiops-k8s-03': 5, 'aiops-k8s-04': 6, 'aiops-k8s-05': 7, 'aiops-k8s-06': 8, 'aiops-k8s-07': 9, 'aiops-k8s-08': 10,

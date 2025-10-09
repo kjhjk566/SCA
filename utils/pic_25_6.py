@@ -516,51 +516,19 @@ def main():
     # display_end = display_end.strftime("%Y-%m-%d %H:%M:%S")
 
     # CSV文件路径 - 修改为您的具体CSV文件路径
-    data_set = 'aiops25'
-    case_id = 4
-    day = 18
-    csv_file_path = f"/home/kuangjunhua/research/data/{data_set}/{day}/all_metric_denoised.csv"  # 请修改为您的CSV文件路径
-    instance = "adservice-2"
-    run_case = pd.read_csv("/home/kuangjunhua/research/data/aiops25/fault_info_2025_5_16_20_clear.csv")
-    day_case = run_case[run_case['end_time'].str.contains(f'2025-05-{day}', na=False)]
+    data_set = 'aiops25_6'
+    case_id = 0
+    day = '2025-06-06'
+    csv_file_path = f"/home/kuangjunhua/research/data/{data_set}/{day}/all_metric.csv"  # 请修改为您的CSV文件路径
+    instance = "emailservice-2"
+    run_case = pd.read_csv("/home/kuangjunhua/research/data/aiops25_6/groundtruth.csv")
+    day_case = run_case[run_case['end_time'].str.contains(f'{day}', na=False)]
     d = day_case.iloc[case_id]
     display_start = (pd.to_datetime(d['start_time']) - pd.Timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
     fault_start = pd.to_datetime(d['start_time']).strftime("%Y-%m-%d %H:%M:%S")
     fault_end = pd.to_datetime(d['end_time']).strftime("%Y-%m-%d %H:%M:%S")
     display_end = (pd.to_datetime(d['end_time']) + pd.Timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
     # 创建可视化工具
-    #降噪后的
-    tool = MetricsVisualizationTool(
-        data_dir=csv_file_path,  # 现在这个参数作为默认文件路径
-        output_dir=f"/home/kuangjunhua/research/SCA/case_pic/{data_set}/{day}/case_{case_id}/{instance}/denoised",  # 图表输出目录
-        fault_start_time=fault_start,
-        fault_end_time=fault_end,
-        metric_name=[instance],  # 设置为None显示所有指标，或传入列表如 ["cpu", "memory"] 进行过滤
-        display_start_time=display_start,
-        display_end_time=display_end,
-        Range = 'all',  # 'all'表示显示全部时间段
-        is_normlize = False
-    )
-    # 生成图表 - 传入CSV文件路径
-    tool.create_charts(csv_file_path)
-
-    tool = MetricsVisualizationTool(
-        data_dir=csv_file_path,  # 现在这个参数作为默认文件路径
-        output_dir=f"/home/kuangjunhua/research/SCA/case_pic/{data_set}/{day}/case_{case_id}/{instance}/denoised",  # 图表输出目录
-        fault_start_time=fault_start,
-        fault_end_time=fault_end,
-        metric_name=[instance],  # 设置为None显示所有指标，或传入列表如 ["cpu", "memory"] 进行过滤
-        display_start_time=display_start,
-        display_end_time=display_end,
-        Range = 'sub',  # 'all'表示显示全部时间段
-        is_normlize = False
-    )
-    # 生成图表 - 传入CSV文件路径
-    tool.create_charts(csv_file_path)
-
-    #降噪前的
-    csv_file_path = f"/home/kuangjunhua/research/data/{data_set}/{day}/all_metric.csv"  # 请修改为您的CSV文件路径
-
     tool = MetricsVisualizationTool(
         data_dir=csv_file_path,  # 现在这个参数作为默认文件路径
         output_dir=f"/home/kuangjunhua/research/SCA/case_pic/{data_set}/{day}/case_{case_id}/{instance}",  # 图表输出目录
@@ -570,11 +538,11 @@ def main():
         display_start_time=display_start,
         display_end_time=display_end,
         Range = 'all',  # 'all'表示显示全部时间段
-        is_normlize = False
+        is_normlize = True
     )
     # 生成图表 - 传入CSV文件路径
     tool.create_charts(csv_file_path)
-    csv_file_path = f"/home/kuangjunhua/research/data/{data_set}/{day}/all_metric.csv"  # 请修改为您的CSV文件路径
+
     tool = MetricsVisualizationTool(
         data_dir=csv_file_path,  # 现在这个参数作为默认文件路径
         output_dir=f"/home/kuangjunhua/research/SCA/case_pic/{data_set}/{day}/case_{case_id}/{instance}",  # 图表输出目录
@@ -584,7 +552,7 @@ def main():
         display_start_time=display_start,
         display_end_time=display_end,
         Range = 'sub',  # 'all'表示显示全部时间段
-        is_normlize = False
+        is_normlize = True
     )
     # 生成图表 - 传入CSV文件路径
     tool.create_charts(csv_file_path)
