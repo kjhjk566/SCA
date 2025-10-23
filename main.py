@@ -151,7 +151,7 @@ def print_prediction_result(case_id, pred_list, true_label, is_correct):
 if __name__ == "__main__":
     # 解析命令行参数
     args = parse_args()
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:7' if torch.cuda.is_available() else 'cpu')
     print("Using device:", device)
     print("运行模式:", args.mode)
     if args.data_range == 'all':
@@ -229,8 +229,8 @@ if __name__ == "__main__":
         print("学习到的因果图（每个滞后）：")
         for i, A in enumerate(A_list, start=1):
             print(f"A^( {i} ):\n", A.detach().cpu().numpy())
-        torch.save(model.state_dict(), args.model_path)
-        print(f"模型已保存到: {args.model_path}")
+        # torch.save(model.state_dict(), args.model_path)
+        # print(f"模型已保存到: {args.model_path}")
     # 方法1: 查看特定实例
     viz_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
     
@@ -265,10 +265,7 @@ if __name__ == "__main__":
     # )
 
     model.to(device)
-    if args.dataset == 'all':
-        path = '/home/kuangjunhua/research/data/aiops22_dataset/case_data.pkl'
-    elif args.dataset == 'normal':
-        path = os.path.join(args.data_path, 'case_20min_data.pkl')
+    
     case_path = os.path.join(args.data_path, 'case_20min_data.pkl')
     with open(case_path, 'rb') as f:
         test_case = pickle.load(f)
@@ -349,7 +346,7 @@ if __name__ == "__main__":
 
 
         #ans, ans_details,label_anomaly_info = root_cause_scorer.get_ans_from_loss(all_score)
-        ans, ans_details,label_anomaly_info = root_cause_scorer.get_root_cause_by_walk(all_score, A_list,label)
+        ans, ans_details,label_anomaly_info = root_cause_scorer.get_root_cause_by_upstream_adjustment(all_score, A_list,label)
 
         print("label_anomaly_info:",label_anomaly_info)
         # 将根因分析结果保存到文本文件
@@ -370,7 +367,7 @@ if __name__ == "__main__":
                     for metric_info in info['top_error_metrics']:
                         f.write(f"    {metric_info['rank']}. {metric_info['metric_name']}: {metric_info['error_value']:.6f}")
             
-            f.write("=== 根因分析结果 ===\n\n")
+            f.write("\n=== 根因分析结果 ===\n\n")
             if ans_details:
                 for instance_name, details in ans_details.items():
                     f.write(f"排名 {details['rank']}: {instance_name} (实例损失: {details['instance_loss']:.6f})\n")
