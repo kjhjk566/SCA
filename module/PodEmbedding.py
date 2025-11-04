@@ -39,24 +39,47 @@ class PodEmbedding(nn.Module):
             raise ValueError(f"Unsupported agg_type: {agg_type}")
 
     def forward(self, x, mapping=None):
-        """
-        推荐输入契约：
-          x: [B, N, M_max, T]  —— 每个实例对齐到相同的 M_max，padding 的位置将用 mapping 做 mask
-          mapping: dict {instance_name: m_i} —— 每个实例的真实指标数
-        也兼容旧契约：
-          x: [B, M_total, T] + mapping （按 mapping 切回各实例，再逐时刻聚合）
+            """
+            推荐输入契约：
+                x: [B, N, M_max, T]  —— 每个实例对齐到相同的 M_max，padding 的位置将用 mapping 做 mask
+                mapping: dict {instance_name: m_i} —— 每个实例的真实指标数
+            扩展契约：
+                x: [B, W, M_total, T] —— W 个滑动窗口，每个窗口沿用同一 mapping（总指标数 = sum m_i）
+            兼容旧契约：
+                x: [B, M_total, T] + mapping （按 mapping 切回各实例，再逐时刻聚合）
 
-        输出：
-          pod_seq: [B, N, D_out, T]  —— 逐时刻的实例嵌入序列（D_out = d_model）
-        """
-        if x.dim() == 4:  # [B,N,M_max,T]
-            assert mapping is not None, "mapping is required for [B,N,M_max,T]"
-            return self._forward_batched_instances(x, mapping)
-        elif x.dim() == 3:  # [B,M_total,T] —— 旧契约
-            assert mapping is not None, "mapping is required for [B,M_total,T]"
-            return self._forward_flat_then_group(x, mapping)
-        else:
-            raise ValueError("x must be [B,N,M_max,T] or [B,M_total,T]")
+            输出：
+                - [B, N, D_out, T] 对应第一种契约
+                - [B, W, N, D_out, T] 对应滑动窗口契约
+                - [B, N, D_out, T] 对应旧契约
+            """
+            if mapping is None:
+                    raise ValueError("mapping is required for PodEmbedding forward")
+
+            if x.dim() == 5:
+                    # 直接认为是 [B, W, N, M_max, T]
+                    B, W, N, M_max, T = x.shape
+                    x = x.reshape(B * W, N, M_max, T)
+                    z = self._forward_batched_instances(x, mapping)       # [B*W,N,D_out,T]
+                    return z.reshape(B, W, z.size(1), z.size(2), z.size(3))
+
+            if x.dim() == 4:
+                    B, dim1, dim2, T = x.shape
+                    if dim1 == len(mapping):
+                            # [B,N,M_max,T]
+                            return self._forward_batched_instances(x, mapping)
+                    else:
+                            # [B,W,M_total,T]
+                            W = dim1
+                            M_total = dim2
+                            x_flat = x.reshape(B * W, M_total, T)
+                            z = self._forward_flat_then_group(x_flat, mapping)  # [B*W,N,D_out,T]
+                            return z.reshape(B, W, z.size(1), z.size(2), z.size(3))
+
+            if x.dim() == 3:  # [B,M_total,T] —— 旧契约
+                    return self._forward_flat_then_group(x, mapping)
+
+            raise ValueError("x must be [B,N,M_max,T], [B,W,M_total,T], [B,M_total,T] or [B,W,N,M_max,T]")
 
     # —— 实现：直接吃 [B,N,M_max,T] 的高效路径
     def _forward_batched_instances(self, x, mapping):

@@ -34,11 +34,16 @@ class TemporalEncoder(nn.Module):
             self.attention_vector = nn.Parameter(torch.randn(hidden_dim))
 
     def forward(self, x):
-        # x: [bs, num_metrics, seq_len]
-        bs, num_metrics, seq_len = x.shape
+        """x shape now supports [bs, num_windows, num_metrics, seq_len]."""
+        if x.dim() == 3:
+            x = x.unsqueeze(1)  # 兼容旧输入: [bs, num_metrics, seq_len] -> [bs, 1, num_metrics, seq_len]
+        elif x.dim() != 4:
+            raise ValueError("TemporalEncoder expects input with 3 or 4 dimensions")
 
-        # 加一维: [bs*num_metrics, seq_len, 1]
-        x = x.view(bs * num_metrics, seq_len, 1)
+        bs, num_windows, num_metrics, seq_len = x.shape
+
+        # 把窗口和指标合并进 batch 维度，提高 Transformer 的并行利用率
+        x = x.reshape(bs * num_windows * num_metrics, seq_len, 1)
 
         # 投影到 hidden_dim: [bs*num_metrics, seq_len, hidden_dim]
         x = self.input_proj(x)
@@ -61,7 +66,7 @@ class TemporalEncoder(nn.Module):
         else:
             raise ValueError(f"Unsupported pooling mode: {self.pooling}")
 
-        # 恢复 batch & num_metrics
-        x = x.view(bs, num_metrics, -1)  # [bs, num_metrics, hidden_dim]
+        # 恢复 batch, window & num_metrics 维度
+        x = x.reshape(bs, num_windows, num_metrics, -1)
 
-        return self.output_proj(x)  # [bs, num_metrics, output_dim]
+        return self.output_proj(x)  # [bs, num_windows, num_metrics, output_dim]

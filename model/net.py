@@ -131,8 +131,6 @@ class gtnet(nn.Module):
 
 
 
-
-  
     def encode(self, input, idx=None):
         seq_len = input.size(3)
         assert seq_len==self.seq_length, 'input sequence length not equal to preset sequence length'

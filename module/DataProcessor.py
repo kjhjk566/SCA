@@ -163,14 +163,48 @@ class DataProcessor:
 
             # 转换为 (num_features, window_size)
             x_window = x_window.T  # [N, T]
-
-            # 增加通道维度 C_in=1，并扩展 batch 维度
           
 
             # 单步预测目标: [num_features]
             y_window = feature_data[start_idx + self.window_size]
 
             windows.append((x_window, y_window))
+        return windows
+
+    def generate_multi_windows(self, num_windows):
+        """
+        生成由 num_windows 个窗口组成的输入序列, 每个窗口长度为 window_size, 窗口之间按 window_stride 滑动。
+
+        :param num_windows: 输入序列中的窗口数量
+        :return: list[(x_window, y_window)]，其中 x_window 形状为 [num_windows, num_features, window_size]，
+                 y_window 为最后一个窗口结束后的单步目标 [num_features]
+        """
+        if num_windows < 1:
+            raise ValueError("num_windows must be a positive integer")
+
+        feature_data = torch.tensor(self.df.iloc[:, 1:].values, dtype=torch.float)
+        total_steps = feature_data.size(0)
+
+        required_span = (num_windows - 1) * self.window_stride + self.window_size
+        max_start = total_steps - required_span - 1
+
+        if max_start < 0:
+            return []
+
+        windows = []
+        for start_idx in range(0, max_start + 1, self.stride):
+            window_stack = []
+            for win_idx in range(num_windows):
+                segment_start = start_idx + win_idx * self.window_stride
+                segment_end = segment_start + self.window_size
+                window_stack.append(feature_data[segment_start:segment_end].T)
+
+            x_window = torch.stack(window_stack, dim=0)
+            y_idx = start_idx + required_span
+            y_window = feature_data[y_idx]
+
+            windows.append((x_window, y_window))
+
         return windows
 
 
@@ -182,7 +216,9 @@ class TimeWindowDataset(Dataset):
         self.config = config
         
 
-        self.windows = self.data_processor.generate_windows_normal()  # 生成滑动窗口数据对
+        #self.windows = self.data_processor.generate_windows_normal()  # 生成滑动窗口数据对
+        self.windows = self.data_processor.generate_multi_windows(5)  # 生成滑动窗口数据对
+
 
 
     def __len__(self):

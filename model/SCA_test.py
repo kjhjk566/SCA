@@ -374,17 +374,17 @@ class SCA(nn.Module):
         :return: output: Tensor of shape [B, 1]
         """
         # 第一步：通过 PodEmbedding 生成 pod-level 表示
-        #print('x_window shape:', x_window.shape)
+        print('x_window shape:', x_window.shape)
         metric_embedding = self.transformer_encoder(x_window)  # [B, N, D]
-        #print("metric_embedding shape:", metric_embedding.shape)  # 输出形状检查
+        print("metric_embedding shape:", metric_embedding.shape)  # 输出形状检查
 
         pod_embedding= self.pod_embedding(x_window,self.config.instance_metric_count_dict)  # [B,N D]
-        #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
         #st_in = pod_embedding.permute(0, 3, 1, 2) 
         #pod_embedding = pod_embedding.unsqueeze(1)
         
         pod_embedding = pod_embedding.permute(0, 2, 1, 3)
-        #print("pod_embedding:", pod_embedding.shape)  # 输出形状检查
+        print("pod_embedding2:", pod_embedding.shape)  # 输出形状检查
         
 
         # ---- L-CNA forward with multi-lag causal learner ----
